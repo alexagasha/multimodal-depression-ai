@@ -1,0 +1,25 @@
+# --- Python ---
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# --- synthetic data & outputs (regenerated, not source) ---
+data/synthetic/sessions/
+outputs/embeddings/
+outputs/predictions/*.csv
+
+# --- frontend (Node / Vite) ---
+frontend/node_modules/
+frontend/dist/
+frontend/.ts-build/
+frontend/*.tsbuildinfo
+frontend/.env
+frontend/.env.local
+
+# --- editor / OS ---
+.vscode/
+.DS_Store
+Thumbs.db

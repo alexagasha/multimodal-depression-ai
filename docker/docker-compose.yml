@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  inference:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      # SWAP: replace synthetic with real data path when deploying on Railway
+      - ../data/synthetic/sessions:/app/data/synthetic/sessions:ro
+      - ../outputs:/app/outputs
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Runs once and exits — swap CMD in Dockerfile for a FastAPI server
+    # when you want a persistent HTTP inference endpoint
+
+  # The persistent FastAPI server the comment above anticipated. Backs the
+  # dashboard below. Data is generated at runtime via the dashboard's
+  # "Generate dataset" control, so no read-only session mount here (unlike
+  # `inference`, which expects a dataset to already exist).
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../data/synthetic:/app/data/synthetic
+      - ../outputs:/app/outputs
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Add the dashboard's deployed origin here if hosting it separately,
+      # e.g. CORS_EXTRA_ORIGINS=https://your-dashboard.vercel.app
+      - CORS_EXTRA_ORIGINS=
+
+  # Dashboard UI. Talks to `api` via nginx reverse proxy (see
+  # frontend/nginx.conf) so the frontend JS only ever calls relative
+  # /api/... paths, same as local dev.
+  dashboard:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
