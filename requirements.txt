@@ -1,0 +1,12 @@
+numpy>=1.26
+scipy>=1.11
+scikit-learn>=1.4
+pandas>=2.2
+pytest>=8.0
+
+# Real backbones (install when swapping mock encoders for real ones):
+# torch>=2.2
+# transformers>=4.40        # multilingual text (XLM-R/AfriBERTa) + Wav2Vec2 (XLSR)
+# librosa>=0.10              # audio resampling / noise reduction
+# soundfile>=0.12            # optional: WAV reading for real/E-DAIC data (scipy fallback exists)
+# shap>=0.45                 # for richer XAI attribution later

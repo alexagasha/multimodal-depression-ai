@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  inference:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      # SWAP: replace synthetic with real data path when deploying on Railway
+      - ../data/synthetic/sessions:/app/data/synthetic/sessions:ro
+      - ../outputs:/app/outputs
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Runs once and exits — swap CMD in Dockerfile for a FastAPI server
+    # when you want a persistent HTTP inference endpoint

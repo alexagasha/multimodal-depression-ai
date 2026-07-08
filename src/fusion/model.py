@@ -1,0 +1,114 @@
+"""
+Lightweight fusion head: concatenated participant vector -> two severity scores.
+
+Multi-task output (agreed): the tool collects both PHQ-9 (self-report) and
+HAM-D (interviewer-rated), so the head predicts BOTH.
+
+Phase 1 architecture (numpy-only, no torch dependency):
+  Linear(D -> 256) -> ReLU -> Dropout(0.3) -> Linear(256 -> 64) -> ReLU -> Linear(64 -> 2)
+  outputs: [phq9, hamd]
+
+This is a deterministic forward-pass stub with random weights that proves the
+shape plumbing is correct end-to-end. Weights are not trained here — training
+happens in train.py once real (or larger synthetic) data is ready.
+
+SWAP instructions for real PyTorch model:
+  See the FusionHeadTorch class at the bottom of this file (final layer -> 2).
+
+Outputs: phq9 in [0, 27], hamd in [0, 44], clamped at inference.
+Binary caseness (the primary classification label) is HAM-D-derived — the
+interviewer-rated score is the clinical gold standard. See HAMD_CASENESS_THRESHOLD.
+"""
+import os
+
+import numpy as np
+
+from .aggregate import FUSION_INPUT_DIM
+
+HIDDEN1 = 256
+HIDDEN2 = 64
+OUTPUT_DIM = 2  # [phq9, hamd]
+
+PHQ9_RANGE = (0.0, 27.0)
+HAMD_RANGE = (0.0, 44.0)  # 11 items x 0-4; paper form misprints /52
+
+# Binary caseness ("depressed") is derived from HAM-D (clinician-rated gold standard).
+# Standard HAM-D-17 caseness is >=8 on the /52 scale; scaled to this 11-item /44
+# form: 8 * 44/52 ~= 7. Confirm against a validated cutoff for the reduced scale.
+HAMD_CASENESS_THRESHOLD = 7.0
+
+
+def relu(x):
+    return np.maximum(0, x)
+
+
+class FusionHead:
+    """
+    Numpy-only fusion MLP. Weights are random at init (untrained).
+    Replace with FusionHeadTorch when ready to train for real.
+    """
+
+    def __init__(self, input_dim=FUSION_INPUT_DIM, seed=0):
+        rng = np.random.default_rng(seed)
+        scale1 = np.sqrt(2.0 / input_dim)
+        scale2 = np.sqrt(2.0 / HIDDEN1)
+        scale3 = np.sqrt(2.0 / HIDDEN2)
+        self.W1 = rng.normal(0, scale1, (HIDDEN1, input_dim)).astype(np.float32)
+        self.b1 = np.zeros(HIDDEN1, dtype=np.float32)
+        self.W2 = rng.normal(0, scale2, (HIDDEN2, HIDDEN1)).astype(np.float32)
+        self.b2 = np.zeros(HIDDEN2, dtype=np.float32)
+        self.W3 = rng.normal(0, scale3, (OUTPUT_DIM, HIDDEN2)).astype(np.float32)
+        self.b3 = np.zeros(OUTPUT_DIM, dtype=np.float32)
+
+    def forward(self, x: np.ndarray) -> dict:
+        """x: shape (FUSION_INPUT_DIM,) -> {"phq9": float, "hamd": float}."""
+        h1 = relu(self.W1 @ x + self.b1)
+        h2 = relu(self.W2 @ h1 + self.b2)
+        out = (self.W3 @ h2 + self.b3).flatten()
+        return {
+            "phq9": float(np.clip(out[0], *PHQ9_RANGE)),
+            "hamd": float(np.clip(out[1], *HAMD_RANGE)),
+        }
+
+    def predict_label(self, x: np.ndarray) -> int:
+        """Binary caseness: 1 if predicted HAM-D >= threshold, else 0 (HAM-D-derived)."""
+        return int(self.forward(x)["hamd"] >= HAMD_CASENESS_THRESHOLD)
+
+    # --- persistence: save / load trained weights as a numpy .npz ---
+    def get_weights(self) -> dict:
+        return {"W1": self.W1, "b1": self.b1, "W2": self.W2,
+                "b2": self.b2, "W3": self.W3, "b3": self.b3}
+
+    def set_weights(self, w: dict):
+        for k in ("W1", "b1", "W2", "b2", "W3", "b3"):
+            setattr(self, k, np.asarray(w[k], dtype=np.float32))
+        return self
+
+    def save(self, path):
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        np.savez(path, **self.get_weights())
+
+    @classmethod
+    def load(cls, path):
+        d = np.load(path)
+        in_dim = int(d["W1"].shape[1])
+        if in_dim != FUSION_INPUT_DIM:
+            print(f"[FusionHead.load] note: weights input_dim={in_dim} "
+                  f"but current FUSION_INPUT_DIM={FUSION_INPUT_DIM}")
+        return cls(input_dim=in_dim).set_weights({k: d[k] for k in
+                   ("W1", "b1", "W2", "b2", "W3", "b3")})
+
+
+# ---------------------------------------------------------------------------
+# Training: the PyTorch version of this head lives in src/fusion/train.py.
+# It trains an identical MLP, then exports the weights back into this numpy
+# FusionHead via .save()/.load() — so inference stays numpy-only (no torch).
+# ---------------------------------------------------------------------------
+
+
+if __name__ == "__main__":
+    model = FusionHead()
+    dummy = np.random.randn(FUSION_INPUT_DIM).astype(np.float32)
+    scores = model.forward(dummy)
+    label = model.predict_label(dummy)
+    print(f"PHQ-9={scores['phq9']:.2f}  HAM-D={scores['hamd']:.2f}  binary={label}")
