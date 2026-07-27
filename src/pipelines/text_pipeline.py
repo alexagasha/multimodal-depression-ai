@@ -1,17 +1,12 @@
 """
 Text pipeline: transcript -> per-segment text -> frozen embedding.
 
-MULTILINGUAL: the study collects data in ~3 languages (assumed English /
-Luganda / Luo). The real encoder must therefore be a multilingual model
-(e.g. XLM-RoBERTa or an African-language model such as AfriBERTa) rather than
-English bert-base — see the SWAP notes below. The participant's preferred
-language is available as the `language` field in metadata if needed for
-routing/adapters.
+ENGLISH ONLY: the study is English-only, so a plain (non-multilingual) BERT
+is used. Weights are pre-downloaded and run on Google Colab.
 
 No stop-word removal, stemming, or TF-IDF — the frozen encoder learns its own
 representation from near-raw text, so preprocessing here is intentionally
-minimal (English contraction expansion + whitespace cleanup only; the
-contraction step is a harmless no-op for Luganda/Luo text).
+minimal (English contraction expansion + whitespace cleanup only).
 """
 import hashlib
 import os
@@ -39,9 +34,9 @@ def clean_text(text):
     return text
 
 
-# Default text encoder — multilingual, so it covers the ~3 study languages.
+# Default text encoder — plain English BERT, pre-downloaded for Colab.
 # Override with the DEP_TEXT_MODEL env var (must have hidden_size == EMBED_DIM).
-DEFAULT_TEXT_MODEL = "xlm-roberta-base"  # 768-d, multilingual
+DEFAULT_TEXT_MODEL = "bert-base-uncased"  # 768-d, English
 
 
 class BertTextEncoder:

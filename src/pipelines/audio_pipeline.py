@@ -5,9 +5,9 @@ No hand-engineered MFCC/Mel-spectrogram/spectral-contrast features needed —
 Wav2Vec2 takes raw waveform and learns its own features. No augmentation,
 since the backbone is frozen and used purely as a feature extractor.
 
-MULTILINGUAL: the study spans ~3 languages (English / Luganda / Luo). The
-English-only wav2vec2-base is a poor fit; the real SWAP target should be a
-multilingual model (e.g. facebook/wav2vec2-large-xlsr-53) — see __init__.
+ENGLISH ONLY: the study is English-only, so the English wav2vec2-base
+checkpoint is used directly (no multilingual XLSR variant needed). Weights
+are pre-downloaded and run on Google Colab.
 """
 import hashlib
 import json
@@ -72,11 +72,8 @@ def slice_segment(audio, sr, start_sec, end_sec):
     return audio[start_idx:end_idx]
 
 
-# Default audio encoder. wav2vec2-base is 768-d (== EMBED_DIM) and works for the
-# English E-DAIC smoke test. For the multilingual Uganda data switch to a model
-# like facebook/wav2vec2-large-xlsr-53 — but that is 1024-d, so you must bump
-# EMBED_DIM here and AUDIO_DIM in fusion/aggregate.py to 1024 to match.
-DEFAULT_AUDIO_MODEL = "facebook/wav2vec2-base-960h"  # 768-d
+# Default audio encoder — English wav2vec2-base, pre-downloaded for Colab.
+DEFAULT_AUDIO_MODEL = "facebook/wav2vec2-base-960h"  # 768-d, English
 
 
 class Wav2Vec2AudioEncoder:

@@ -1,13 +1,13 @@
 """
-Metadata pipeline: Section A sociodemographic fields + preferred language
--> fixed-length numeric vector.
+Metadata pipeline: Section A sociodemographic fields -> fixed-length numeric
+vector.
 
 Simplest pipeline of the four:
   - one vector per participant (not per segment)
   - the same vector is attached to every segment for that participant
   - no time-alignment or segmenting needed
 
-Encoding (matches the real data-collection tool, Section A + D1 language):
+Encoding (matches the real data-collection tool, Section A):
   age_band          ordinal  (1)   18-25 .. 56-65
   sex               binary   (1)
   marital_status    one-hot  (4)   married / divorced / widowed / single
@@ -16,14 +16,15 @@ Encoding (matches the real data-collection tool, Section A + D1 language):
   education_level   ordinal  (1)   none / primary / secondary / tertiary_university
   employment_status one-hot  (4)   employed / unemployed / self-employed / student
   smartphone        binary   (1)
-  language          one-hot  (3)   english / luganda / luo   (~3 study languages)
                     -----------------------------------------------------------
-                    EMBED_DIM = 19
+                    EMBED_DIM = 16
 
 NOTE: `site` (Butabika/Mulago/Other) is intentionally EXCLUDED from the feature
 vector — it is recruitment provenance and would let the model shortcut on
 "which hospital" instead of symptoms. It stays in the metadata JSON for
 stratified analysis only.
+
+The study is English-only, so there is no `language` field.
 """
 import json
 import os
@@ -41,11 +42,9 @@ EDUCATION_ORDER = ["none", "primary", "secondary", "tertiary_university"]
 MARITAL_CATS = ["married", "divorced", "widowed", "single"]
 ETHNICITY_CATS = ["bantu", "luo", "other"]
 EMPLOYMENT_CATS = ["employed", "unemployed", "self-employed", "student"]
-# ~3 study languages. CONFIGURABLE — keep in sync with the generator's LANGUAGES.
-LANGUAGE_CATS = ["english", "luganda", "luo"]
 
-# 1 + 1 + 4 + 3 + 1 + 1 + 4 + 1 + 3
-EMBED_DIM = 19
+# 1 + 1 + 4 + 3 + 1 + 1 + 4 + 1
+EMBED_DIM = 16
 
 
 def _ordinal(value, order):
@@ -88,7 +87,6 @@ def encode_metadata(meta: dict) -> np.ndarray:
         np.array([_ordinal(meta.get("education_level"), EDUCATION_ORDER)], dtype=np.float32),
         _one_hot(meta.get("employment_status"), EMPLOYMENT_CATS),
         np.array([_binary(meta.get("smartphone"), "yes")], dtype=np.float32),
-        _one_hot(meta.get("language"), LANGUAGE_CATS),
     ]
     vec = np.concatenate(parts).astype(np.float32)
     assert vec.shape == (EMBED_DIM,), f"metadata dim mismatch: {vec.shape} != ({EMBED_DIM},)"

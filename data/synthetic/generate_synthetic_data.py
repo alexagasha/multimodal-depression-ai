@@ -7,7 +7,7 @@ Each participant session folder contains:
     {pid}_TRANSCRIPT.csv   - start_time, stop_time, speaker, value
     {pid}_AUDIO.npy         - placeholder raw audio (silence + light noise)
     {pid}_AUDIO.meta.json   - sample_rate, duration_sec
-    {pid}_METADATA.json     - Section A demographics + language + site
+    {pid}_METADATA.json     - Section A demographics + site
 LABELS.csv                  - participant_id, phq9_score, hamd_score, split
 
 Label scheme (multi-task, agreed):
@@ -56,10 +56,6 @@ EDUCATION = ["none", "primary", "secondary", "tertiary_university"]
 EMPLOYMENT = ["employed", "unemployed", "self-employed", "student"]
 SITES = ["butabika", "mulago", "other"]
 
-# ~3 study languages. CONFIGURABLE — adjust to the confirmed language set.
-# Assumed English / Luganda / Luo (Bantu + Luo tribes, Butabika/Mulago sites).
-LANGUAGES = ["english", "luganda", "luo"]
-
 
 def make_transcript(pid, n_turns=20):
     rows = []
@@ -82,7 +78,7 @@ def make_audio(duration_sec, sample_rate=16000):
 
 
 def make_metadata(pid):
-    """Section A demographics + preferred language (D1) + site (provenance)."""
+    """Section A demographics + site (provenance)."""
     return {
         "participant_id": pid,
         "age_band": random.choice(AGE_BANDS),
@@ -93,7 +89,6 @@ def make_metadata(pid):
         "education_level": random.choice(EDUCATION),
         "employment_status": random.choice(EMPLOYMENT),
         "smartphone": random.choice(["yes", "no"]),
-        "language": random.choice(LANGUAGES),
         "site": random.choice(SITES),  # kept for stratification, NOT a model feature
     }
 

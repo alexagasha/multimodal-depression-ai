@@ -6,7 +6,7 @@ noise. This is the *harness* — built now so robustness is a tracked gate from
 day one and can be run in CI. The numbers only become meaningful once the real
 frozen backbones + trained weights replace the mock encoders/untrained head.
 
-Noise models (realistic for phone-recorded clinic interviews across ~3 languages):
+Noise models (realistic for phone-recorded, English-language clinic interviews):
   - audio: additive Gaussian noise at a target SNR (dB)
   - text:  character-level corruption (substitute / delete / insert) at a rate
 

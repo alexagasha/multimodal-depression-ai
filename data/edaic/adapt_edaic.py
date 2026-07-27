@@ -17,8 +17,6 @@ CAVEATS (why this is a smoke test, not an evaluation of the objectives):
   - E-DAIC has PHQ-8 only -> phq9_score is filled from PHQ-8 as a proxy, and
     hamd_score is left blank (no HAM-D in E-DAIC), so HAM-D accuracy cannot be
     evaluated here.
-  - E-DAIC is English -> language is set to "english"; the ~3-language
-    robustness gate is not exercised.
   - E-DAIC transcripts have no speaker column and may include a few setup/agent
     lines at the start; all rows are kept as participant speech.
 """
@@ -107,8 +105,7 @@ def adapt_session(session_dir, pid, out_dir, split="test", labels_csv=None):
         g = str(lab["gender"]).strip().lower()
         sex = {"1": "female", "0": "male", "f": "female", "m": "male",
                "female": "female", "male": "male"}.get(g, "unknown")
-    meta = {"participant_id": int(pid), "sex": sex, "language": "english",
-            "source": "e-daic-woz"}
+    meta = {"participant_id": int(pid), "sex": sex, "source": "e-daic-woz"}
     with open(os.path.join(dst, f"{pid}_METADATA.json"), "w") as f:
         json.dump(meta, f)
 

@@ -8,17 +8,17 @@ N is variable per participant (ragged sessions) — mean pooling absorbs
 this naturally without padding, truncation, or special batching logic.
 
 Fusion vector layout:
-  [text_pooled (768) | audio_pooled (768) | metadata (19)]
-  Total input dim = 1555
+  [text_pooled (768) | audio_pooled (768) | metadata (16)]
+  Total input dim = 1552
 """
 import numpy as np
 
 TEXT_DIM = 768
 AUDIO_DIM = 768
-METADATA_DIM = 19  # keep in sync with metadata_pipeline.EMBED_DIM
+METADATA_DIM = 16  # keep in sync with metadata_pipeline.EMBED_DIM
 
 # text + audio + metadata
-FUSION_INPUT_DIM = TEXT_DIM + AUDIO_DIM + METADATA_DIM  # 1555
+FUSION_INPUT_DIM = TEXT_DIM + AUDIO_DIM + METADATA_DIM  # 1552
 
 
 def mean_pool(embeddings: list) -> np.ndarray:
@@ -56,4 +56,4 @@ if __name__ == "__main__":
     dummy_audio = [np.random.randn(AUDIO_DIM).astype(np.float32) for _ in range(5)]
     dummy_meta = np.random.randn(METADATA_DIM).astype(np.float32)
     vec = build_participant_vector(dummy_text, dummy_audio, dummy_meta)
-    print(f"Participant fusion vector shape: {vec.shape}")  # expect (1539,)
+    print(f"Participant fusion vector shape: {vec.shape}")  # expect (1552,)

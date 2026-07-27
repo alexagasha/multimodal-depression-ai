@@ -2,21 +2,28 @@
 
 **Source instrument:** `QUESTIONAIRE-V2_R_concise_May 26.docx`
 **Key decision (agreed):** predict **PHQ-9 (/27) and HAM-D (multi-task, two outputs)**.
-**Languages:** ~3 study languages, assumed **English / Luganda / Luo** — first-class (see §1b).
+**Languages:** **DROPPED (2026-07-27) — study is English-only.** Multilingual support
+(§1b below) was built speculatively and has been removed; see §1c.
+
+**Status (2026-07-27): English-only, plain BERT + Wav2Vec2 (2026-07-27).**
+Data collection is starting soon and IRB/LUREC is cleared. The team confirmed the
+study is **English-only** (no Luganda/Luo), so multilingual handling was ripped out:
+`language` removed from metadata (16-dim now, was 19), `FUSION_INPUT_DIM` 1555→1552,
+text encoder is plain `bert-base-uncased` (was `xlm-roberta-base`), audio encoder
+stays `wav2vec2-base-960h` (was already English, multilingual-swap note removed).
+Both models are **pre-downloaded and run on Google Colab**. 15/16 tests pass (1
+skipped, torch-only, Colab).
 
 **Status (2026-07-07): Phase-1 scaffold IMPLEMENTED and green (11/11 tests pass).**
-Done: multi-task labels (§1), 19-dim categorical metadata + `language` (§2, §1b),
-`FUSION_INPUT_DIM` 1539→1555, multilingual encoder SWAP notes (text + audio),
-transcript speaker renamed `Interviewer`, **HAM-D-derived caseness label + accuracy
-& noise-robustness eval gates (§4b)**. Verified via regenerate → run_pipeline →
-metrics → robustness → pytest.
+Done: multi-task labels (§1), categorical metadata (§2), transcript speaker renamed
+`Interviewer`, **HAM-D-derived caseness label + accuracy & noise-robustness eval
+gates (§4b)**. Verified via regenerate → run_pipeline → metrics → robustness → pytest.
 
 **Still open (design/confirmation, not blocking the stub):**
 - ⚠️ HAM-D denominator — implemented as **/44** (11 items × 4); form misprints /52. Confirm.
-- Confirm the actual 3 languages (assumed EN/Luganda/Luo) — one constant in two files.
 - Site excluded from features (recommended) — confirm.
 - ~~Video capture/consent~~ — **video removed** (2026-07-07): not in the questionnaire; pipeline is text + audio + metadata.
-- Real multilingual backbones (XLM-R / AfriBERTa text, wav2vec2-XLSR audio) at data time.
+- ~~Multilingual~~ — **dropped (2026-07-27)**: study confirmed English-only.
 
 ---
 
@@ -72,28 +79,34 @@ Currently `phq8_score` (0–24) is threaded through 6 files. Replace with two ta
 
 ---
 
-## 1b. Languages (~3) — multilingual handling
+## 1b. Languages — DROPPED, historical record only
 
-The study collects data in ~3 languages (assumed **English / Luganda / Luo**,
-from the tool's Bantu/Luo tribes and Butabika/Mulago sites; D1 also records
-"language or dialect used most comfortably").
+~~The study collects data in ~3 languages (assumed English / Luganda / Luo)~~ —
+**superseded 2026-07-27: the study is English-only.** This section originally
+built multilingual handling speculatively, ahead of confirmation. It has been
+fully removed from the code (see §1c) and is kept here only as a record of what
+was undone, in case multilingual support is revisited later.
 
-- [x] `language` captured as a metadata field (generator) and one-hot encoded
-      (3 dims) in the fusion vector. Configurable via `LANGUAGES` /
-      `LANGUAGE_CATS` constants — **change in both `generate_synthetic_data.py`
-      and `metadata_pipeline.py` if the language set differs.**
-- [x] Text encoder SWAP note points at a **multilingual** model
-      (XLM-RoBERTa / AfriBERTa), not English `bert-base`.
-- [x] Audio encoder SWAP note points at **wav2vec2-large-xlsr-53** (multilingual);
-      flagged that its hidden size is 1024 → would change `AUDIO_DIM`.
-- [ ] **Confirm the exact 3 languages.** One-line change if different.
-- [ ] **Transcription path:** if transcripts come from ASR (not hand-transcribed),
-      you need multilingual ASR (e.g. Whisper) upstream of the text pipeline.
-- [ ] **Code-switching:** the form records one preferred language per participant,
-      but interviews may mix languages within a session. Decide whether language
-      is per-participant (current) or per-segment before real data lands.
-- [ ] **Per-language evaluation:** report metrics stratified by `language` (small
-      per-language N is likely) so one language doesn't dominate the score.
+Previously implemented (now removed): `language` metadata field + one-hot
+encoding (3 dims), multilingual text encoder (XLM-RoBERTa), multilingual audio
+encoder SWAP note (wav2vec2-large-xlsr-53), per-language robustness framing.
+
+## 1c. English-only pivot (2026-07-27)
+
+- [x] **`src/pipelines/text_pipeline.py`**: `DEFAULT_TEXT_MODEL` →
+      `bert-base-uncased` (plain BERT, 768-d). Multilingual docstring removed.
+- [x] **`src/pipelines/audio_pipeline.py`**: kept `wav2vec2-base-960h` (already
+      English); removed the multilingual-XLSR SWAP note.
+- [x] Both models are **pre-downloaded** and run on **Google Colab**.
+- [x] **`src/pipelines/metadata_pipeline.py`**: removed `language` field and
+      `LANGUAGE_CATS` one-hot (3 dims). `EMBED_DIM` 19 → **16**.
+- [x] **`data/synthetic/generate_synthetic_data.py`**: removed `LANGUAGES`
+      constant and the `language` key from `make_metadata()`.
+- [x] **`src/fusion/aggregate.py`**: `METADATA_DIM` 19 → 16;
+      `FUSION_INPUT_DIM` 1555 → **1552**.
+- [x] **`data/edaic/adapt_edaic.py`**: dropped the `language: "english"` metadata
+      key it used to stamp on adapted E-DAIC sessions (no longer a schema field).
+- [x] 15/16 tests pass (1 skipped, torch-only) after regenerating synthetic data.
 
 ---
 
@@ -156,13 +169,11 @@ The tool collects categoricals; age and education are **bands/levels**, not inte
       "Suicide domain", and D2 Q9 all have "immediate risk assessment and referral"
       in the form. Never silently drop item 9 (even though it's "assessment only"):
       preserve it and route flagged responses to an alert, don't just feed a score.
-- [ ] **PII / de-identification.** Participant ID, Site, Interviewer name, tribe, and
-      preferred language are sensitive. Separate identifiers from the ML feature store
+- [ ] **PII / de-identification.** Participant ID, Site, Interviewer name, and tribe
+      are sensitive. Separate identifiers from the ML feature store
       (Supabase) — the fusion vector must not carry Site/Interviewer (see §2).
-- [ ] **Multilingual text.** D1 captures "language or dialect used most comfortably";
-      transcripts may be Luganda / Luo / English. The `text_pipeline.py` `# SWAP` should
-      consider a multilingual/African-language encoder (e.g. XLM-R, AfriBERTa) rather
-      than English `bert-base`.
+- ~~**Multilingual text.**~~ **Dropped (2026-07-27)** — study confirmed English-only;
+      see §1c.
 - [x] **Video modality removed** (2026-07-07). The form never mentions video capture or
       consent, so video was dropped entirely: `video_pipeline.py` deleted, no video frames
       in synthetic data, no video branch in fusion/XAI. Pipeline is text + audio + metadata.
@@ -204,15 +215,16 @@ check, **not** an objectives eval (E-DAIC is PHQ-8, English, no HAM-D):
 - `audio_pipeline.load_audio` now reads `.wav` as well as `.npy`.
 - `BertTextEncoder` / `Wav2Vec2AudioEncoder` load real HF models when
   torch+transformers are present (Colab GPU) and **fall back to mocks** otherwise —
-  so the local suite stays green. Defaults `xlm-roberta-base` (768-d) and
-  `wav2vec2-base-960h` (768-d); override via `DEP_TEXT_MODEL` / `DEP_AUDIO_MODEL`.
+  so the local suite stays green. Defaults `bert-base-uncased` (768-d) and
+  `wav2vec2-base-960h` (768-d), both English, **pre-downloaded for Colab**;
+  override via `DEP_TEXT_MODEL` / `DEP_AUDIO_MODEL`.
 - `notebooks/edaic_colab.ipynb` — Colab bootstrap (mount Drive → install → adapt → run).
 
 Verified locally on the real `304_P` session (mock encoders): adapter → 27 segments →
 prediction. Note the E-DAIC `304_AUDIO.wav` has a bogus header data-size field (scipy
 warns but reads the ~13 min correctly; libsndfile/soundfile on Colab handles it too).
-For multilingual Uganda audio, switch to `wav2vec2-large-xlsr-53` and bump
-`AUDIO_DIM`/`EMBED_DIM` to 1024.
+E-DAIC is English, so this smoke test now matches the study's confirmed
+English-only language setting.
 
 ---
 
