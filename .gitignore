@@ -41,6 +41,7 @@ Thumbs.db
 outputs/
 data/synthetic/sessions/
 data/edaic/sessions/
+data/live/
 .pytest_cache/
 .coverage
 htmlcov/

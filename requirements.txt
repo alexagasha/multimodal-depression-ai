@@ -4,9 +4,18 @@ scikit-learn>=1.4
 pandas>=2.2
 pytest>=8.0
 
+# Local backend API (Phase 1 of the system roadmap; runs with mock encoders,
+# no GPU/heavy ML deps required for local testing):
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9      # multipart/form audio uploads
+httpx>=0.27                  # FastAPI TestClient dependency
+
 # Real backbones (install when swapping mock encoders for real ones):
 # torch>=2.2
 # transformers>=4.40        # BERT (text) + Wav2Vec2 (audio), both English
 # librosa>=0.10              # audio resampling / noise reduction
 # soundfile>=0.12            # optional: WAV reading for real/E-DAIC data (scipy fallback exists)
 # shap>=0.45                 # for richer XAI attribution later
+# openai-whisper>=20231117   # real ASR (src/pipelines/asr_pipeline.py); mock fallback otherwise
+# anthropic>=0.34            # real GenUI narrative (api/genui.py); template fallback otherwise

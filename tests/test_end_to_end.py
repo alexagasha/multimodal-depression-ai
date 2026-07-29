@@ -116,6 +116,42 @@ def test_full_pipeline_end_to_end():
     print(f"\n[E2E] pid=300 | PHQ-9 pred={result['phq9_pred']} HAM-D pred={result['hamd_pred']} | binary={result['binary_pred']}")
 
 
+def test_risk_flag_independent_of_model():
+    """
+    risk_flag must reflect the item-level PHQ-9/HAM-D scores regardless of the
+    (untrained, near-random) fusion head's prediction — see src/safety/risk_flag.py.
+    """
+    from src.fusion.run_pipeline import run_participant
+    from src.pipelines.text_pipeline import BertTextEncoder
+    from src.pipelines.audio_pipeline import Wav2Vec2AudioEncoder
+    from src.fusion.model import FusionHead
+    text_enc = BertTextEncoder()
+    audio_enc = Wav2Vec2AudioEncoder()
+    model = FusionHead()
+
+    elevated = run_participant(300, text_enc, audio_enc, model, data_root=DATA_ROOT,
+                                phq9_item9=2, hamd_suicide_item=0)
+    assert elevated["risk_flag"] is True
+
+    clear = run_participant(300, text_enc, audio_enc, model, data_root=DATA_ROOT,
+                             phq9_item9=0, hamd_suicide_item=0)
+    assert clear["risk_flag"] is False
+
+    # No item scores supplied -> risk_flag omitted, not silently False.
+    omitted = run_participant(300, text_enc, audio_enc, model, data_root=DATA_ROOT)
+    assert "risk_flag" not in omitted
+
+
+def test_flag_risk_rules():
+    from src.safety.risk_flag import flag_risk
+    assert flag_risk(0, 0) is False
+    assert flag_risk(1, 0) is True
+    assert flag_risk(0, 1) is True
+    assert flag_risk(None, 2) is True
+    with pytest.raises(ValueError):
+        flag_risk(None, None)
+
+
 def test_metrics_harness():
     import pandas as pd
     from src.eval.metrics import compute_metrics

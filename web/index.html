@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Depression Screening — Local Demo</title>
+<style>
+  /*
+    Minimal static demo of the score-modal vertical slice (Phase 1+3 of the
+    system roadmap, scoped down). Vanilla HTML/CSS/JS on purpose — no build
+    step, so it's testable the moment the API is running. The real Phase 3
+    deliverable is a Next.js app with live audio recording, auth, and full
+    WCAG coverage; this page proves the API contract end-to-end and gives
+    the score modal a first real home.
+  */
+  :root {
+    color-scheme: light dark;
+    --accent: #2b6cb0;
+    --danger: #b3261e;
+    --danger-bg: #fdecea;
+    --border: #ccc;
+    --bg-muted: #f5f5f5;
+  }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-width: 720px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.4rem; }
+  fieldset {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 1.25rem;
+    padding: 1rem;
+  }
+  legend { font-weight: 600; padding: 0 0.4rem; }
+  label { display: block; margin-top: 0.6rem; font-size: 0.95rem; }
+  input, select {
+    width: 100%;
+    padding: 0.4rem;
+    margin-top: 0.2rem;
+    font-size: 1rem;
+    box-sizing: border-box;
+  }
+  button {
+    margin-top: 0.9rem;
+    padding: 0.6rem 1.1rem;
+    font-size: 1rem;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent);
+    color: white;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .status { font-size: 0.9rem; margin-top: 0.5rem; min-height: 1.2em; }
+  .status[data-kind="error"] { color: var(--danger); }
+  .status[data-kind="ok"] { color: #1a7f37; }
+
+  .risk-banner {
+    background: var(--danger-bg);
+    color: var(--danger);
+    border: 2px solid var(--danger);
+    border-radius: 8px;
+    padding: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+
+  dialog#score-modal {
+    border: none;
+    border-radius: 10px;
+    padding: 0;
+    width: min(600px, 92vw);
+  }
+  dialog#score-modal::backdrop { background: rgba(0,0,0,0.5); }
+  .modal-inner { padding: 1.25rem 1.5rem; }
+  .score-row { display: flex; gap: 1.5rem; margin: 0.75rem 0; }
+  .score-tile {
+    flex: 1;
+    background: var(--bg-muted);
+    border-radius: 8px;
+    padding: 0.75rem;
+    text-align: center;
+  }
+  .score-tile .value { font-size: 1.6rem; font-weight: 700; }
+  .attr-row { display: flex; align-items: center; gap: 0.6rem; margin: 0.35rem 0; }
+  .attr-label { width: 90px; font-size: 0.9rem; }
+  .attr-bar-track { flex: 1; background: var(--bg-muted); border-radius: 4px; height: 12px; overflow: hidden; }
+  .attr-bar-fill { height: 100%; background: var(--accent); }
+  .narrative {
+    background: var(--bg-muted);
+    border-radius: 8px;
+    padding: 0.75rem;
+    font-size: 0.95rem;
+    margin-top: 0.75rem;
+  }
+  .narrative .tag {
+    display: inline-block;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #666;
+    margin-bottom: 0.3rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>Depression Screening — local demo</h1>
+<p>
+  Talks directly to the local FastAPI backend (Phase 1 of the system roadmap).
+  Walks through participant intake → PHQ-9/HAM-D item responses → audio upload →
+  scoring → the score modal.
+</p>
+
+<label for="api-base">API base URL</label>
+<input id="api-base" value="http://localhost:8000">
+
+<fieldset>
+  <legend>1. Participant intake (Section A)</legend>
+  <form id="participant-form">
+    <label for="age_band">Age band</label>
+    <select id="age_band" required>
+      <option value="18-25">18-25</option>
+      <option value="26-35">26-35</option>
+      <option value="36-45">36-45</option>
+      <option value="46-55">46-55</option>
+      <option value="56-65">56-65</option>
+    </select>
+
+    <label for="sex">Sex</label>
+    <select id="sex" required>
+      <option value="female">Female</option>
+      <option value="male">Male</option>
+    </select>
+
+    <label for="marital_status">Marital status</label>
+    <select id="marital_status" required>
+      <option value="married">Married</option>
+      <option value="divorced">Divorced</option>
+      <option value="widowed">Widowed</option>
+      <option value="single">Single</option>
+    </select>
+
+    <label for="ethnicity">Ethnicity / tribe</label>
+    <select id="ethnicity" required>
+      <option value="bantu">Bantu</option>
+      <option value="luo">Luo</option>
+      <option value="other">Other</option>
+    </select>
+
+    <label for="residence">Residence</label>
+    <select id="residence" required>
+      <option value="urban">Urban</option>
+      <option value="semi-urban">Semi-urban</option>
+      <option value="rural">Rural</option>
+    </select>
+
+    <label for="education_level">Education level</label>
+    <select id="education_level" required>
+      <option value="none">None</option>
+      <option value="primary">Primary</option>
+      <option value="secondary">Secondary</option>
+      <option value="tertiary_university">Tertiary / University</option>
+    </select>
+
+    <label for="employment_status">Employment status</label>
+    <select id="employment_status" required>
+      <option value="employed">Employed</option>
+      <option value="unemployed">Unemployed</option>
+      <option value="self-employed">Self-employed</option>
+      <option value="student">Student</option>
+    </select>
+
+    <label for="smartphone">Owns a smartphone?</label>
+    <select id="smartphone" required>
+      <option value="yes">Yes</option>
+      <option value="no">No</option>
+    </select>
+
+    <label for="site">Site</label>
+    <select id="site" required>
+      <option value="butabika">Butabika</option>
+      <option value="mulago">Mulago</option>
+      <option value="other">Other</option>
+    </select>
+
+    <button type="submit">Create participant &amp; session</button>
+    <p class="status" id="participant-status" role="status"></p>
+  </form>
+</fieldset>
+
+<fieldset id="scale-fieldset" disabled>
+  <legend>2. PHQ-9 / HAM-D scale responses</legend>
+  <form id="scale-form">
+    <label for="phq9_total">PHQ-9 total (0-27)</label>
+    <input id="phq9_total" type="number" min="0" max="27" required>
+
+    <label for="hamd_total">HAM-D total (0-44)</label>
+    <input id="hamd_total" type="number" min="0" max="44" required>
+
+    <label for="phq9_item9">
+      PHQ-9 item 9 (thoughts of self-harm, 0-3) — carries a mandatory referral protocol
+    </label>
+    <input id="phq9_item9" type="number" min="0" max="3" required>
+
+    <label for="hamd_suicide_item">HAM-D suicide domain (0-4) — same referral protocol</label>
+    <input id="hamd_suicide_item" type="number" min="0" max="4" required>
+
+    <button type="submit">Submit scale responses</button>
+    <p class="status" id="scale-status" role="status"></p>
+  </form>
+</fieldset>
+
+<div id="risk-banner" class="risk-banner" role="alert" hidden>
+  ⚠ Referral flag active — this session's PHQ-9 item 9 / HAM-D suicide-domain
+  response indicates immediate risk-assessment and referral, per protocol. This
+  is independent of any model prediction below.
+</div>
+
+<fieldset id="audio-fieldset" disabled>
+  <legend>3. Interview audio</legend>
+  <p>
+    Upload a WAV file of the interview. (Live in-browser recording is the
+    Phase 2/3 upgrade to this same endpoint — see the system roadmap; this
+    demo exercises the upload contract directly.)
+  </p>
+  <form id="audio-form">
+    <label for="audio-file">Audio file (.wav)</label>
+    <input id="audio-file" type="file" accept="audio/wav" required>
+    <button type="submit">Upload audio</button>
+    <p class="status" id="audio-status" role="status"></p>
+  </form>
+</fieldset>
+
+<fieldset id="score-fieldset" disabled>
+  <legend>4. Score</legend>
+  <button id="score-btn" type="button">Run scoring</button>
+  <p class="status" id="score-status" role="status"></p>
+</fieldset>
+
+<dialog id="score-modal" aria-labelledby="score-modal-title">
+  <div class="modal-inner">
+    <h2 id="score-modal-title">Screening result</h2>
+
+    <div class="score-row">
+      <div class="score-tile">
+        <div>PHQ-9</div>
+        <div class="value" id="modal-phq9">–</div>
+        <div>/ 27</div>
+      </div>
+      <div class="score-tile">
+        <div>HAM-D</div>
+        <div class="value" id="modal-hamd">–</div>
+        <div>/ 44</div>
+      </div>
+      <div class="score-tile">
+        <div>Caseness</div>
+        <div class="value" id="modal-caseness">–</div>
+      </div>
+    </div>
+
+    <div id="modal-risk-banner" class="risk-banner" role="alert" hidden>
+      ⚠ Referral flag active for this session.
+    </div>
+
+    <h3>Modality attribution</h3>
+    <div id="modal-attributions"></div>
+
+    <div class="narrative">
+      <div class="tag">AI-generated commentary — not a diagnosis</div>
+      <div id="modal-narrative">–</div>
+    </div>
+
+    <button id="close-modal" type="button">Close</button>
+  </div>
+</dialog>
+
+<script>
+  let sessionId = null;
+
+  function apiBase() { return document.getElementById('api-base').value.replace(/\/$/, ''); }
+  function setStatus(id, msg, kind) {
+    const el = document.getElementById(id);
+    el.textContent = msg;
+    el.dataset.kind = kind || '';
+  }
+
+  document.getElementById('participant-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setStatus('participant-status', 'Creating participant…');
+    const body = {};
+    ['age_band','sex','marital_status','ethnicity','residence',
+     'education_level','employment_status','smartphone','site'].forEach(id => {
+      body[id] = document.getElementById(id).value;
+    });
+    try {
+      const pRes = await fetch(`${apiBase()}/participants`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      if (!pRes.ok) throw new Error(`participants: HTTP ${pRes.status}`);
+      const { participant_id } = await pRes.json();
+
+      const sRes = await fetch(`${apiBase()}/sessions`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ participant_id }),
+      });
+      if (!sRes.ok) throw new Error(`sessions: HTTP ${sRes.status}`);
+      const { session_id } = await sRes.json();
+      sessionId = session_id;
+
+      setStatus('participant-status', `Session created: ${session_id}`, 'ok');
+      document.getElementById('scale-fieldset').disabled = false;
+    } catch (err) {
+      setStatus('participant-status', String(err), 'error');
+    }
+  });
+
+  document.getElementById('scale-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setStatus('scale-status', 'Submitting…');
+    const body = {
+      phq9_total: Number(document.getElementById('phq9_total').value),
+      hamd_total: Number(document.getElementById('hamd_total').value),
+      phq9_item9: Number(document.getElementById('phq9_item9').value),
+      hamd_suicide_item: Number(document.getElementById('hamd_suicide_item').value),
+    };
+    try {
+      const res = await fetch(`${apiBase()}/sessions/${sessionId}/scale-responses`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { risk_flag } = await res.json();
+      setStatus('scale-status', 'Recorded.', 'ok');
+      document.getElementById('risk-banner').hidden = !risk_flag;
+      document.getElementById('audio-fieldset').disabled = false;
+    } catch (err) {
+      setStatus('scale-status', String(err), 'error');
+    }
+  });
+
+  document.getElementById('audio-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setStatus('audio-status', 'Uploading + transcribing…');
+    const file = document.getElementById('audio-file').files[0];
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const res = await fetch(`${apiBase()}/sessions/${sessionId}/audio`, {
+        method: 'POST', body: form,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setStatus('audio-status', `${data.n_transcript_rows} transcript segment(s), ${data.duration_sec.toFixed(1)}s.`, 'ok');
+      document.getElementById('score-fieldset').disabled = false;
+    } catch (err) {
+      setStatus('audio-status', String(err), 'error');
+    }
+  });
+
+  document.getElementById('score-btn').addEventListener('click', async () => {
+    setStatus('score-status', 'Scoring…');
+    try {
+      const res = await fetch(`${apiBase()}/sessions/${sessionId}/score`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result = await res.json();
+      renderScoreModal(result);
+      setStatus('score-status', 'Done.', 'ok');
+    } catch (err) {
+      setStatus('score-status', String(err), 'error');
+    }
+  });
+
+  function renderScoreModal(result) {
+    document.getElementById('modal-phq9').textContent = result.phq9_pred.toFixed(1);
+    document.getElementById('modal-hamd').textContent = result.hamd_pred.toFixed(1);
+    document.getElementById('modal-caseness').textContent = result.binary_pred ? 'Case' : 'Non-case';
+    document.getElementById('modal-risk-banner').hidden = !result.risk_flag;
+    document.getElementById('modal-narrative').textContent = result.narrative;
+
+    const attrHost = document.getElementById('modal-attributions');
+    attrHost.innerHTML = '';
+    for (const [modality, score] of Object.entries(result.modality_attributions)) {
+      const pct = Math.round(Math.min(1, Math.abs(score)) * 100);
+      const row = document.createElement('div');
+      row.className = 'attr-row';
+      row.innerHTML = `
+        <div class="attr-label">${modality}</div>
+        <div class="attr-bar-track"><div class="attr-bar-fill" style="width:${pct}%"></div></div>
+        <div>${score.toFixed(2)}</div>`;
+      attrHost.appendChild(row);
+    }
+
+    document.getElementById('score-modal').showModal();
+  }
+
+  document.getElementById('close-modal').addEventListener('click', () => {
+    document.getElementById('score-modal').close();
+  });
+</script>
+
+</body>
+</html>

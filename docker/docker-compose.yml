@@ -1,15 +1,33 @@
-version: "3.9"
-
 services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../data:/app/data
+      - ../outputs:/app/outputs
+    environment:
+      - PYTHONUNBUFFERED=1
+      # - ANTHROPIC_API_KEY=          # optional: real GenUI narrative (template fallback otherwise)
+      # - DEP_TEXT_MODEL=              # optional: real BERT checkpoint override
+      # - DEP_AUDIO_MODEL=             # optional: real Wav2Vec2 checkpoint override
+      # - DEP_ASR_MODEL=               # optional: real Whisper checkpoint override
+    # `docker compose up` (default, no --profile) brings up just this service.
+    # Open web/index.html in a browser to exercise the score modal against it.
+
   inference:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+    command: ["python", "-m", "src.fusion.run_pipeline"]
     volumes:
-      # SWAP: replace synthetic with real data path when deploying on Railway
+      # SWAP: replace synthetic with real data path when deploying for real
       - ../data/synthetic/sessions:/app/data/synthetic/sessions:ro
       - ../outputs:/app/outputs
     environment:
       - PYTHONUNBUFFERED=1
-    # Runs once and exits — swap CMD in Dockerfile for a FastAPI server
-    # when you want a persistent HTTP inference endpoint
+    profiles: ["batch"]
+    # One-off batch scoring job, not brought up by a plain `docker compose up`:
+    #   docker compose --profile batch up inference

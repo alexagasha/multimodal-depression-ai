@@ -5,6 +5,12 @@
 **Languages:** **DROPPED (2026-07-27) — study is English-only.** Multilingual support
 (§1b below) was built speculatively and has been removed; see §1c.
 
+**Status (2026-07-29): score model is code-complete — only real data + training
+remain.** The last open code gap (safety/referral flag, §4) is now implemented.
+Everything else in this doc's checklist was already done in code. The rest of the
+system (backend API, live audio web app, GenUI/RAG, Firebase data platform/deploy) is
+tracked separately — see the plan/roadmap, not this migration doc.
+
 **Status (2026-07-27): English-only, plain BERT + Wav2Vec2 (2026-07-27).**
 Data collection is starting soon and IRB/LUREC is cleared. The team confirmed the
 study is **English-only** (no Luganda/Luo), so multilingual handling was ripped out:
@@ -18,6 +24,11 @@ skipped, torch-only, Colab).
 Done: multi-task labels (§1), categorical metadata (§2), transcript speaker renamed
 `Interviewer`, **HAM-D-derived caseness label + accuracy & noise-robustness eval
 gates (§4b)**. Verified via regenerate → run_pipeline → metrics → robustness → pytest.
+
+**Safety gap closed (2026-07-29):** the referral-protocol flag for PHQ-9 item 9 /
+HAM-D suicide domain is now implemented — see §4 below and `src/safety/risk_flag.py`.
+This was the last remaining *code* gap; the score model now needs only real data +
+training, not further implementation.
 
 **Still open (design/confirmation, not blocking the stub):**
 - ⚠️ HAM-D denominator — implemented as **/44** (11 items × 4); form misprints /52. Confirm.
@@ -43,32 +54,32 @@ earmarked for text + audio modelling. Three things change everywhere: the
 
 Currently `phq8_score` (0–24) is threaded through 6 files. Replace with two targets.
 
-- [ ] **`data/synthetic/generate_synthetic_data.py`**
+- [x] **`data/synthetic/generate_synthetic_data.py`**
   - `LABELS.csv` columns: drop `phq8_score`; add `phq9_score` (0–27) and
     `hamd_score` (0–44 — see ⚠️ below). Keep `participant_id`, `split`.
   - `generate()` label line (currently `np.clip(np.random.normal(8,5),0,24)`):
     emit both scores; give them positive correlation so multi-task eval is meaningful.
-- [ ] **`src/fusion/model.py`**
+- [x] **`src/fusion/model.py`**
   - `OUTPUT_DIM = 1` → `2`; `W3` becomes shape `(2, HIDDEN2)`.
   - Replace `PHQ8_MIN, PHQ8_MAX = 0, 24` with per-head ranges:
     `PHQ9_RANGE = (0, 27)`, `HAMD_RANGE = (0, 44)`. Clamp each output independently.
   - `forward()` returns two values (dict or tuple), not a scalar.
   - `predict_label()` binary caseness from **PHQ-9 ≥ 10** (standard cutoff — keep
-    `DEPRESSION_THRESHOLD = 10`).
+    `DEPRESSION_THRESHOLD = 10`). *(Superseded — see §4b: caseness is now HAM-D-derived.)*
   - Mirror the change in the commented `FusionHeadTorch` (final `nn.Linear(HIDDEN2, 2)`).
-- [ ] **`src/fusion/run_pipeline.py`**
+- [x] **`src/fusion/run_pipeline.py`**
   - `phq8_pred` → `phq9_pred`, `hamd_pred`; `phq8_true` → `phq9_true`, `hamd_true`.
-  - `binary_pred` / `binary_true` derive from PHQ-9.
+  - `binary_pred` / `binary_true` derive from PHQ-9. *(Superseded — HAM-D-derived, §4b.)*
   - `run_all()` reads `phq9_score` + `hamd_score` from `LABELS.csv`.
-- [ ] **`src/eval/metrics.py`**
+- [x] **`src/eval/metrics.py`**
   - Report RMSE + MAE **per target** (`phq9`, `hamd`) — 4 regression numbers.
   - Keep F1 (weighted/macro) + confusion matrix on the PHQ-9 binary.
   - Update the `df must contain columns:` docstring contract.
-- [ ] **`src/xai/attribution.py`**
+- [x] **`src/xai/attribution.py`**
   - Permutation ablation measures the drop in **one** output; pick the target to
     attribute (recommend PHQ-9 primary) or return attributions for both.
   - `baseline_phq8_pred` key → `baseline_phq9_pred` (+ hamd if attributing both).
-- [ ] **`tests/test_end_to_end.py`**
+- [x] **`tests/test_end_to_end.py`**
   - Update column names, the sample eval frame (`phq8_true`/`phq8_pred`), and the
     model-output assertion (now 2 outputs, not a scalar). `"phq8_pred" in result`
     → `"phq9_pred"`.
@@ -127,13 +138,13 @@ The tool collects categoricals; age and education are **bands/levels**, not inte
 | Smartphone | Yes / No | binary | 1 |
 | **Site** | Butabika / Mulago / Other | **exclude from features** (provenance) | 0 |
 
-- [ ] **`data/synthetic/generate_synthetic_data.py` → `make_metadata()`**: emit the
+- [x] **`data/synthetic/generate_synthetic_data.py` → `make_metadata()`**: emit the
       fields above with categorical values matching the form's wording exactly.
-- [ ] **`src/pipelines/metadata_pipeline.py` → `encode_metadata()`**: replace the
+- [x] **`src/pipelines/metadata_pipeline.py` → `encode_metadata()`**: replace the
       3-field encoder with the categorical scheme; recompute `EMBED_DIM`
       (≈ **16** with the table above — exact value depends on ordinal-vs-one-hot choices).
       Update the field-list docstring.
-- [ ] **`src/fusion/aggregate.py`**: `METADATA_DIM` must equal the new `EMBED_DIM`;
+- [x] **`src/fusion/aggregate.py`**: `METADATA_DIM` must equal the new `EMBED_DIM`;
       `FUSION_INPUT_DIM` recomputes (e.g. 768 + 768 + 16 = **1552**). The XAI
       metadata slice keys off `METADATA_DIM`, so it follows automatically.
 - [ ] Decisions to confirm:
@@ -165,10 +176,17 @@ The tool collects categoricals; age and education are **bands/levels**, not inte
 
 ## 4. Safety, ethics & governance (not optional)
 
-- [ ] **Suicide/self-harm items carry a referral protocol.** PHQ-9 item 9, HAM-D
-      "Suicide domain", and D2 Q9 all have "immediate risk assessment and referral"
-      in the form. Never silently drop item 9 (even though it's "assessment only"):
-      preserve it and route flagged responses to an alert, don't just feed a score.
+- [x] **Suicide/self-harm items carry a referral protocol — implemented (2026-07-29).**
+      PHQ-9 item 9, HAM-D "Suicide domain", and D2 Q9 all have "immediate risk
+      assessment and referral" in the form. `src/safety/risk_flag.py` (`flag_risk()`)
+      is a rule-based check — never dependent on the fusion head, XAI, or any
+      generated narrative — that flags either item scoring above 0. Wired into
+      `run_pipeline.run_participant()`, which surfaces `risk_flag` distinct from
+      `binary_pred`. `LABELS.csv` now tracks `phq9_item9_score` /
+      `hamd_suicide_item_score` per participant so the item isn't just baked into
+      the aggregate total. Still open: the actual **alert routing** (who gets
+      notified, how) is a product/ops decision for the web app + data platform,
+      not the scoring pipeline — see the system roadmap.
 - [ ] **PII / de-identification.** Participant ID, Site, Interviewer name, and tribe
       are sensitive. Separate identifiers from the ML feature store
       (Supabase) — the fusion vector must not carry Site/Interviewer (see §2).

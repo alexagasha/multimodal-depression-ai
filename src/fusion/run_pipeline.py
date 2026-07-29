@@ -7,6 +7,10 @@ the inference entry point once real data and trained weights are available.
 
 Predicts both severity scores (PHQ-9 and HAM-D); binary caseness (the primary
 classification label) is derived from HAM-D >= threshold (clinician gold standard).
+
+Also surfaces risk_flag (see src/safety/risk_flag.py) when item-level PHQ-9
+item 9 / HAM-D suicide-domain scores are supplied — a rule-based safety check,
+independent of and never gated by the ML prediction.
 """
 import os
 import sys
@@ -22,10 +26,19 @@ from src.pipelines.audio_pipeline import Wav2Vec2AudioEncoder, run_audio_pipelin
 from src.pipelines.metadata_pipeline import run_metadata_pipeline
 from src.fusion.aggregate import build_participant_vector
 from src.fusion.model import FusionHead, HAMD_CASENESS_THRESHOLD
+from src.safety.risk_flag import flag_risk
 
 
-def run_participant(pid, text_enc, audio_enc, fusion_head, data_root=DATA_ROOT):
-    """Full pipeline for a single participant. Returns result dict."""
+def run_participant(pid, text_enc, audio_enc, fusion_head, data_root=DATA_ROOT,
+                     phq9_item9=None, hamd_suicide_item=None):
+    """
+    Full pipeline for a single participant. Returns result dict.
+
+    phq9_item9 / hamd_suicide_item: optional item-level risk scores (see
+    src/safety/risk_flag.py). When provided, risk_flag is computed
+    independently of the ML prediction — a rule-based safety check that
+    stands even if the fusion head is untrained.
+    """
     segments = build_segments(pid, data_root=data_root)
     if not segments:
         print(f"[WARN] pid={pid}: no participant segments found, skipping.")
@@ -39,13 +52,16 @@ def run_participant(pid, text_enc, audio_enc, fusion_head, data_root=DATA_ROOT):
     scores = fusion_head.forward(fusion_vec)
     binary_pred = int(scores["hamd"] >= HAMD_CASENESS_THRESHOLD)
 
-    return {
+    result = {
         "participant_id": pid,
         "n_segments": len(segments),
         "phq9_pred": round(float(scores["phq9"]), 3),
         "hamd_pred": round(float(scores["hamd"]), 3),
         "binary_pred": binary_pred,
     }
+    if phq9_item9 is not None or hamd_suicide_item is not None:
+        result["risk_flag"] = flag_risk(phq9_item9, hamd_suicide_item)
+    return result
 
 
 def run_all(data_root=DATA_ROOT, labels_path=None, split_filter=None):
@@ -63,16 +79,20 @@ def run_all(data_root=DATA_ROOT, labels_path=None, split_filter=None):
 
     results = []
     for pid in labels_df["participant_id"]:
-        r = run_participant(int(pid), text_enc, audio_enc, model, data_root)
+        row = labels_df[labels_df["participant_id"] == pid].iloc[0]
+        phq9_item9 = row.get("phq9_item9_score")
+        hamd_suicide_item = row.get("hamd_suicide_item_score")
+        r = run_participant(int(pid), text_enc, audio_enc, model, data_root,
+                             phq9_item9=phq9_item9, hamd_suicide_item=hamd_suicide_item)
         if r:
-            row = labels_df[labels_df["participant_id"] == pid].iloc[0]
             r["phq9_true"] = row["phq9_score"]
             r["hamd_true"] = row["hamd_score"]
             r["binary_true"] = int(row["hamd_score"] >= HAMD_CASENESS_THRESHOLD)
             r["split"] = row["split"]
             results.append(r)
+            risk_note = f" | RISK_FLAG={r['risk_flag']}" if r.get("risk_flag") else ""
             print(f"pid={pid} | true PHQ-9={r['phq9_true']} HAM-D={r['hamd_true']} | "
-                  f"pred PHQ-9={r['phq9_pred']} HAM-D={r['hamd_pred']} | binary={r['binary_pred']}")
+                  f"pred PHQ-9={r['phq9_pred']} HAM-D={r['hamd_pred']} | binary={r['binary_pred']}{risk_note}")
 
     return pd.DataFrame(results)
 

@@ -8,11 +8,15 @@ Each participant session folder contains:
     {pid}_AUDIO.npy         - placeholder raw audio (silence + light noise)
     {pid}_AUDIO.meta.json   - sample_rate, duration_sec
     {pid}_METADATA.json     - Section A demographics + site
-LABELS.csv                  - participant_id, phq9_score, hamd_score, split
+LABELS.csv                  - participant_id, phq9_score, hamd_score,
+                               phq9_item9_score, hamd_suicide_item_score, split
 
 Label scheme (multi-task, agreed):
     phq9_score  0-27   (Section B, self-report)
     hamd_score  0-44   (Section C, 11 items x 0-4; the paper form misprints /52)
+    phq9_item9_score / hamd_suicide_item_score - the two risk-carrying items,
+    tracked separately (not just baked into the totals above) so
+    src/safety/risk_flag.py can flag them independent of the aggregate score.
 
 This mirrors the real instrument closely enough that swapping in real files
 later only requires pointing DATA_ROOT at the new folder — no pipeline changes.
@@ -94,11 +98,20 @@ def make_metadata(pid):
 
 
 def make_labels():
-    """Two correlated severity scores from one latent 'true severity' factor."""
+    """
+    Correlated severity scores from one latent 'true severity' factor, plus the
+    two risk-carrying items (PHQ-9 item 9, HAM-D suicide domain) tracked
+    separately so src/safety/risk_flag.py can flag them independent of the
+    aggregate score / ML prediction.
+    """
     latent = np.random.normal(0.0, 1.0)
     phq9 = int(np.clip(round(8 + latent * 5), 0, 27))   # Section B, 0-27
     hamd = int(np.clip(round(14 + latent * 8), 0, 44))  # Section C, 0-44
-    return phq9, hamd
+    # Item-level risk indicators, weakly correlated with latent severity so some
+    # (not all) higher-severity synthetic participants trigger the referral flag.
+    phq9_item9 = int(np.clip(round(latent * 1.2 + np.random.normal(0, 0.6)), 0, 3))
+    hamd_suicide = int(np.clip(round(latent * 1.5 + np.random.normal(0, 0.8)), 0, 4))
+    return phq9, hamd, phq9_item9, hamd_suicide
 
 
 def generate(n_participants, out_dir):
@@ -126,9 +139,10 @@ def generate(n_participants, out_dir):
         with open(os.path.join(session_dir, f"{pid}_METADATA.json"), "w") as f:
             json.dump(make_metadata(pid), f)
 
-        phq9, hamd = make_labels()
+        phq9, hamd, phq9_item9, hamd_suicide = make_labels()
         labels.append({"participant_id": pid, "phq9_score": phq9,
-                       "hamd_score": hamd, "split": splits[i]})
+                       "hamd_score": hamd, "phq9_item9_score": phq9_item9,
+                       "hamd_suicide_item_score": hamd_suicide, "split": splits[i]})
 
     pd.DataFrame(labels).to_csv(os.path.join(out_dir, "LABELS.csv"), index=False)
     print(f"Generated {n_participants} synthetic sessions in {out_dir}")
