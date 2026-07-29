@@ -43,13 +43,17 @@ downstream needs to be touched once real weights are trained.
 
 **The rest of the system (backend API, web app, live audio, data platform,
 deploy) is being built out beyond the score model itself.** A local FastAPI
-backend (`api/`) and a minimal static demo page (`web/index.html`) already
-exercise the full loop — participant intake → PHQ-9/HAM-D item responses
-(with the referral flag firing immediately, independent of the model) →
-audio upload → ASR (mock fallback, same convention) → scoring → the score
-modal, with a GenUI narrative (template fallback without an API key). See
-the phased roadmap for what's next (live in-browser recording, the real
-Next.js app, DSM-5-grounded RAG, and the Firebase production deploy).
+backend (`api/`) and a real Next.js + Tailwind web app (`web/`, organic
+sage/clay theme, hand-authored SVG assets) exercise the full loop: triage
+dashboard (risk-flagged sessions first) → participant intake with consent →
+live mic recording (real `getUserMedia`/`AudioContext` WAV capture, with a
+file-upload fallback) → PHQ-9/HAM-D scale responses with per-item read-aloud
+(referral flag fires immediately, independent of the model) → scoring → the
+score modal (gauges, XAI attribution bars, a GenUI narrative, a clinician
+review/adjust action, print-to-PDF) → append-only clinical notes → a
+longitudinal trend view across a participant's repeat sessions. See the
+phased roadmap for what's next (DSM-5-grounded RAG and the Firebase
+production deploy).
 
 ## Directory structure
 
@@ -83,8 +87,10 @@ depression-detection/
 │   ├── main.py                          # HTTP endpoints, wraps the pipeline unchanged
 │   ├── storage.py                       # local JSON store (Firestore-shaped; swaps in Phase 4)
 │   └── genui.py                         # score-modal narrative (Claude, template fallback)
-├── web/
-│   └── index.html                       # minimal static score-modal demo (calls api/)
+├── web/                                 # Next.js + TypeScript + Tailwind app (organic theme)
+│   ├── app/                             # dashboard, intake, sessions/[id], participants/[id]
+│   ├── components/                      # ScaleForm, AudioRecorder, ScoreModal, ClinicalNotes, …
+│   └── lib/                             # typed API client + draft-autosave hook
 ├── tests/
 │   ├── test_end_to_end.py               # pipeline smoke tests on synthetic data
 │   └── test_api.py                      # full local API flow
@@ -104,25 +110,33 @@ python src/fusion/run_pipeline.py
 python -m pytest tests/
 ```
 
-## Running the local API + demo score modal
+## Running the local API + web app
 
 ```bash
+# backend
 pip install -r requirements.txt
 uvicorn api.main:app --reload
-# then open web/index.html directly in a browser (CORS is open for local dev)
+
+# frontend (separate terminal)
+cd web
+npm install
+npm run dev
+# open http://localhost:3000
 ```
 
-Or via Docker (`docker compose up` from `docker/`, brings up just the API by
-default; `docker compose --profile batch up inference` runs the one-off batch
-scoring job instead). Optional env vars: `ANTHROPIC_API_KEY` (real GenUI
-narrative instead of the template fallback), `DEP_TEXT_MODEL` /
-`DEP_AUDIO_MODEL` / `DEP_ASR_MODEL` (real backbone overrides).
+Or the backend via Docker (`docker compose up` from `docker/`, brings up just
+the API by default; `docker compose --profile batch up inference` runs the
+one-off batch scoring job instead). Optional env vars: `ANTHROPIC_API_KEY`
+(real GenUI narrative instead of the template fallback), `DEP_TEXT_MODEL` /
+`DEP_AUDIO_MODEL` / `DEP_ASR_MODEL` (real backbone overrides),
+`NEXT_PUBLIC_API_BASE` for the frontend (defaults to `http://localhost:8000`).
 
 This exercises the same vertical slice as the smoke test above, but through
-HTTP: participant intake → PHQ-9/HAM-D scale responses (referral flag fires
-immediately) → audio upload → scoring → the score modal. `web/index.html` is
-a deliberately minimal stand-in for the real web app (Next.js, live in-browser
-recording, auth, full WCAG coverage) — see the roadmap.
+the real UI: triage dashboard → intake → live mic recording or file upload →
+PHQ-9/HAM-D scales → scoring → the score modal → clinical notes → the
+participant trend view. No Firebase account or cloud credentials needed —
+everything runs against the local JSON store. Auth/RLS/production data
+platform are still on the roadmap (Phase 4).
 
 ## When E-DAIC-WOZ access clears
 

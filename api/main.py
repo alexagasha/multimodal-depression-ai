@@ -15,11 +15,14 @@ implementation only, not the call sites). api/genui.py generates the score
 modal's narrative (Claude if ANTHROPIC_API_KEY is set, template otherwise).
 """
 import io
+import json
 import os
 import sys
 import uuid
+from datetime import datetime, timezone
+from typing import Optional
 
-import numpy as np
+import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -87,6 +90,23 @@ class ScaleResponsesIn(BaseModel):
     hamd_suicide_item: int
 
 
+class ClinicalNoteIn(BaseModel):
+    author: str
+    note_text: str
+
+
+class ReviewIn(BaseModel):
+    reviewer: str
+    agrees: bool
+    adjusted_phq9: Optional[float] = None
+    adjusted_hamd: Optional[float] = None
+    comment: Optional[str] = None
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _session_dir(session_id: str) -> str:
     return os.path.join(LIVE_DATA_ROOT, session_id)
 
@@ -96,6 +116,31 @@ def _require_session(session_id: str) -> dict:
     if session is None:
         raise HTTPException(404, f"session {session_id} not found")
     return session
+
+
+def _enrich_session(session: dict) -> dict:
+    """Join a session record with its prediction, if scored — used by the
+    triage-queue dashboard and the participant trend view so the frontend
+    doesn't need N+1 fetches."""
+    prediction = store.get("predictions", session["session_id"])
+    review = store.get("clinician_reviews", session["session_id"])
+    return {
+        **session,
+        "phq9_pred": prediction["phq9_pred"] if prediction else None,
+        "hamd_pred": prediction["hamd_pred"] if prediction else None,
+        "binary_pred": prediction["binary_pred"] if prediction else None,
+        "reviewed": review is not None,
+    }
+
+
+def _triage_sort_key(session: dict):
+    # Risk-flagged sessions first, then by HAM-D severity (unscored sessions
+    # sort after scored ones within each group), then oldest-first.
+    return (
+        0 if session.get("risk_flag") else 1,
+        -(session["hamd_pred"] if session.get("hamd_pred") is not None else -1),
+        session.get("created_at") or "",
+    )
 
 
 @app.post("/participants")
@@ -118,7 +163,6 @@ def create_session(body: SessionIn):
 
     metadata = {k: v for k, v in participant.items() if k != "participant_id"}
     metadata["participant_id"] = session_id  # pid used by metadata_pipeline is the session id
-    import json
     with open(os.path.join(session_dir, f"{session_id}_METADATA.json"), "w") as f:
         json.dump(metadata, f)
 
@@ -127,6 +171,7 @@ def create_session(body: SessionIn):
         "participant_id": body.participant_id,
         "status": "created",
         "risk_flag": None,
+        "created_at": _now_iso(),
     }
     store.set("sessions", session_id, record)
     return {"session_id": session_id}
@@ -154,12 +199,10 @@ async def upload_audio(session_id: str, file: UploadFile):
 
     waveform, sr = _load_wav(wav_path)
     duration_sec = len(waveform) / float(sr)
-    import json
     with open(os.path.join(session_dir, f"{session_id}_AUDIO.meta.json"), "w") as f:
         json.dump({"sample_rate": sr, "duration_sec": duration_sec}, f)
 
     transcript_rows = run_asr_pipeline(waveform, sr, _asr)
-    import pandas as pd
     pd.DataFrame(transcript_rows).to_csv(
         os.path.join(session_dir, f"{session_id}_TRANSCRIPT.csv"), index=False
     )
@@ -174,6 +217,10 @@ def score_session(session_id: str):
     scale = store.get("scale_responses", session_id)
     if scale is None:
         raise HTTPException(400, "scale responses not submitted yet")
+
+    transcript_path = os.path.join(_session_dir(session_id), f"{session_id}_TRANSCRIPT.csv")
+    if not os.path.exists(transcript_path):
+        raise HTTPException(400, "no audio uploaded yet — POST /sessions/{id}/audio first")
 
     segments = build_segments(session_id, data_root=LIVE_DATA_ROOT)
     if not segments:
@@ -215,6 +262,80 @@ def get_results(session_id: str):
     if result is None:
         raise HTTPException(404, "not scored yet — POST /sessions/{id}/score first")
     return result
+
+
+@app.get("/sessions/{session_id}")
+def get_session(session_id: str):
+    """Single enriched session — status + prediction (if scored) + review
+    flag. Powers the session workspace page."""
+    return _enrich_session(_require_session(session_id))
+
+
+@app.get("/sessions")
+def list_sessions():
+    """Triage queue: every session enriched with its prediction, risk-flagged
+    sessions first, then by severity. Powers the dashboard."""
+    sessions = [_enrich_session(s) for s in store.list("sessions")]
+    sessions.sort(key=_triage_sort_key)
+    return sessions
+
+
+@app.get("/participants/{participant_id}/sessions")
+def list_participant_sessions(participant_id: str):
+    """A participant's full session history, chronological — powers the
+    longitudinal trend view (repeat PHQ-9/HAM-D administration over time)."""
+    if store.get("participants", participant_id) is None:
+        raise HTTPException(404, f"participant {participant_id} not found")
+    sessions = [
+        _enrich_session(s) for s in store.list("sessions")
+        if s["participant_id"] == participant_id
+    ]
+    sessions.sort(key=lambda s: s.get("created_at") or "")
+    return sessions
+
+
+@app.post("/sessions/{session_id}/notes")
+def add_clinical_note(session_id: str, body: ClinicalNoteIn):
+    """Clinical notes are append-only, matching real clinical documentation
+    practice — amend via a new note, never edit/delete history."""
+    _require_session(session_id)
+    notes = store.get("clinical_notes", session_id) or []
+    note = {
+        "note_id": uuid.uuid4().hex[:10],
+        "author": body.author,
+        "note_text": body.note_text,
+        "created_at": _now_iso(),
+    }
+    notes.append(note)
+    store.set("clinical_notes", session_id, notes)
+    return note
+
+
+@app.get("/sessions/{session_id}/notes")
+def get_clinical_notes(session_id: str):
+    _require_session(session_id)
+    return store.get("clinical_notes", session_id) or []
+
+
+@app.post("/sessions/{session_id}/review")
+def submit_review(session_id: str, body: ReviewIn):
+    """Clinician confirms or adjusts the model's prediction. Doubles as the
+    raw data a future ICC clinical-validation pass would need."""
+    _require_session(session_id)
+    if store.get("predictions", session_id) is None:
+        raise HTTPException(400, "session not scored yet — POST /sessions/{id}/score first")
+    review = {**body.model_dump(), "session_id": session_id, "reviewed_at": _now_iso()}
+    store.set("clinician_reviews", session_id, review)
+    return review
+
+
+@app.get("/sessions/{session_id}/review")
+def get_review(session_id: str):
+    _require_session(session_id)
+    review = store.get("clinician_reviews", session_id)
+    if review is None:
+        raise HTTPException(404, "not reviewed yet")
+    return review
 
 
 @app.get("/health")

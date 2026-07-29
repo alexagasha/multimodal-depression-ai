@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+:root {
+  /* Organic theme: warm sage green (primary), clay/terracotta (accent),
+     cream/oat (background). The referral/risk banner deliberately does NOT
+     use these tokens — it stays high-contrast red everywhere, see
+     components/RiskBanner.tsx. */
+  --color-sage-50: #f4f7f1;
+  --color-sage-100: #e6ede0;
+  --color-sage-200: #cddcc1;
+  --color-sage-300: #aec89b;
+  --color-sage-400: #8bb373;
+  --color-sage-500: #6b9950;
+  --color-sage-600: #547b3d;
+  --color-sage-700: #405e30;
+  --color-sage-800: #304523;
+  --color-sage-900: #212f19;
+
+  --color-clay-100: #f6e6d9;
+  --color-clay-300: #e5b48a;
+  --color-clay-400: #d99760;
+  --color-clay-500: #c17a42;
+  --color-clay-600: #9c6033;
+
+  --color-cream-50: #fdfbf6;
+  --color-cream-100: #faf4e9;
+  --color-cream-200: #f3e9d4;
+
+  --color-ink-700: #3a352c;
+  --color-ink-900: #221f1a;
+
+  --color-danger: #b3261e;
+  --color-danger-bg: #fdecea;
+  --color-danger-border: #e0847d;
+
+  --color-background: var(--color-cream-50);
+  --color-foreground: var(--color-ink-900);
+}
+
+@theme inline {
+  --color-sage-50: var(--color-sage-50);
+  --color-sage-100: var(--color-sage-100);
+  --color-sage-200: var(--color-sage-200);
+  --color-sage-300: var(--color-sage-300);
+  --color-sage-400: var(--color-sage-400);
+  --color-sage-500: var(--color-sage-500);
+  --color-sage-600: var(--color-sage-600);
+  --color-sage-700: var(--color-sage-700);
+  --color-sage-800: var(--color-sage-800);
+  --color-sage-900: var(--color-sage-900);
+
+  --color-clay-100: var(--color-clay-100);
+  --color-clay-300: var(--color-clay-300);
+  --color-clay-400: var(--color-clay-400);
+  --color-clay-500: var(--color-clay-500);
+  --color-clay-600: var(--color-clay-600);
+
+  --color-cream-50: var(--color-cream-50);
+  --color-cream-100: var(--color-cream-100);
+  --color-cream-200: var(--color-cream-200);
+
+  --color-ink-700: var(--color-ink-700);
+  --color-ink-900: var(--color-ink-900);
+
+  --color-danger: var(--color-danger);
+  --color-danger-bg: var(--color-danger-bg);
+  --color-danger-border: var(--color-danger-border);
+
+  --color-background: var(--color-background);
+  --color-foreground: var(--color-foreground);
+
+  --font-sans: var(--font-nunito);
+  --font-display: var(--font-quicksand);
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+/* Print stylesheet: the score-modal "Print / Save PDF" action prints only
+   the element marked [data-print-area], stripped of the organic chrome
+   (nav, background blobs, buttons) — this is a clinical document, not a
+   themed screenshot. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  [data-print-area],
+  [data-print-area] * {
+    visibility: visible;
+  }
+  [data-print-area] {
+    position: absolute;
+    inset: 0;
+    box-shadow: none !important;
+  }
+  [data-no-print] {
+    display: none !important;
+  }
+}
