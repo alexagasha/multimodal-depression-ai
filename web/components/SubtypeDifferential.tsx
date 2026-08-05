@@ -1,3 +1,6 @@
+"use client";
+
+import { motion } from "motion/react";
 import { SubtypeDifferentialResult, SubtypeLikelihood } from "@/lib/api";
 
 const SUBTYPE_LABEL: Record<keyof SubtypeDifferentialResult, string> = {
@@ -44,12 +47,15 @@ export default function SubtypeDifferential({
         Symptom-subtype differential — AI-suggested, not a diagnosis
       </p>
       <div className="mt-2 space-y-2">
-        {(Object.keys(SUBTYPE_LABEL) as (keyof SubtypeDifferentialResult)[]).map((key) => {
+        {(Object.keys(SUBTYPE_LABEL) as (keyof SubtypeDifferentialResult)[]).map((key, i) => {
           const entry = data[key];
           const isPsychoticAlert = key === "psychotic_features" && entry.likelihood !== "none";
           return (
-            <div
+            <motion.div
               key={key}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 * i, duration: 0.35 }}
               className={`rounded-xl p-2.5 ${
                 isPsychoticAlert
                   ? "border border-amber-300 bg-amber-50"
@@ -65,16 +71,19 @@ export default function SubtypeDifferential({
                     </span>
                   )}
                 </span>
-                <span
+                <motion.span
+                  initial={{ scale: 0.5, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ delay: 0.1 * i + 0.2, type: "spring", stiffness: 300, damping: 15 }}
                   className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${LIKELIHOOD_STYLE[entry.likelihood]}`}
                 >
                   {LIKELIHOOD_LABEL[entry.likelihood]}
-                </span>
+                </motion.span>
               </div>
               {entry.rationale && (
                 <p className="mt-1 text-xs text-sage-700">{entry.rationale}</p>
               )}
-            </div>
+            </motion.div>
           );
         })}
       </div>

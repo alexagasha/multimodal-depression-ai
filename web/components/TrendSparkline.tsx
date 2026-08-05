@@ -1,3 +1,6 @@
+"use client";
+
+import { motion } from "motion/react";
 import { TreatmentEvent, VisitSummary } from "@/lib/api";
 
 const WIDTH = 420;
@@ -66,8 +69,13 @@ export default function TrendSparkline({
           y2={HEIGHT - PAD}
           stroke="var(--color-sage-200)"
         />
-        {eventMarkers.map(({ event, x }) => (
-          <g key={event.event_id}>
+        {eventMarkers.map(({ event, x }, i) => (
+          <motion.g
+            key={event.event_id}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.9 + i * 0.1, duration: 0.4 }}
+          >
             <line
               x1={x} y1={PAD - 6} x2={x} y2={HEIGHT - PAD}
               stroke="var(--color-clay-400)" strokeWidth="1" strokeDasharray="3,2"
@@ -76,14 +84,46 @@ export default function TrendSparkline({
               {EVENT_LABEL[event.event_type]}
               <title>{`${event.event_type.replace("_", " ")}: ${event.description}`}</title>
             </text>
-          </g>
+          </motion.g>
         ))}
-        <polyline points={phq9Points} fill="none" stroke="var(--color-sage-500)" strokeWidth="2" />
-        <polyline points={hamdPoints} fill="none" stroke="var(--color-clay-500)" strokeWidth="2" />
+        <motion.polyline
+          points={phq9Points}
+          fill="none"
+          stroke="var(--color-sage-500)"
+          strokeWidth="2"
+          initial={{ pathLength: 0 }}
+          animate={{ pathLength: 1 }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+        />
+        <motion.polyline
+          points={hamdPoints}
+          fill="none"
+          stroke="var(--color-clay-500)"
+          strokeWidth="2"
+          initial={{ pathLength: 0 }}
+          animate={{ pathLength: 1 }}
+          transition={{ duration: 0.8, delay: 0.15, ease: "easeOut" }}
+        />
         {scored.map((s, i) => (
           <g key={s.session_id}>
-            <circle cx={xForIndex(i)} cy={yFor(s.phq9_pred!, 27)} r={3.5} fill="var(--color-sage-500)" />
-            <circle cx={xForIndex(i)} cy={yFor(s.hamd_pred!, 44)} r={3.5} fill="var(--color-clay-500)" />
+            <motion.circle
+              cx={xForIndex(i)}
+              cy={yFor(s.phq9_pred!, 27)}
+              r={3.5}
+              fill="var(--color-sage-500)"
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ delay: 0.8 + i * 0.05, type: "spring", stiffness: 400, damping: 15 }}
+            />
+            <motion.circle
+              cx={xForIndex(i)}
+              cy={yFor(s.hamd_pred!, 44)}
+              r={3.5}
+              fill="var(--color-clay-500)"
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ delay: 0.95 + i * 0.05, type: "spring", stiffness: 400, damping: 15 }}
+            />
           </g>
         ))}
       </svg>

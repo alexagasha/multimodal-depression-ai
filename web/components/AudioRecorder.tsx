@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { api, ApiError } from "@/lib/api";
 import { Card } from "@/components/FormField";
 
@@ -12,6 +13,10 @@ import { Card } from "@/components/FormField";
  * browsers' MediaRecorder doesn't encode WAV directly, hence this approach).
  * ScriptProcessorNode is deprecated but universally supported; AudioWorklet
  * is the eventual upgrade (see docs/system-roadmap.md Phase 2).
+ *
+ * A parallel AnalyserNode drives a live canvas waveform while recording —
+ * purely visual, doesn't touch the PCM capture path — so the interview
+ * feels like a real recording session, not a black box with a timer.
  *
  * Falls back to a plain file upload when the microphone isn't available.
  */
@@ -26,17 +31,62 @@ export default function AudioRecorder({
   const [seconds, setSeconds] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastResult, setLastResult] = useState<{ duration_sec: number; n_transcript_rows: number } | null>(null);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Float32Array[]>([]);
   const sampleRateRef = useRef(16000);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => stopWaveform, []);
+
+  function drawWaveform() {
+    const canvas = canvasRef.current;
+    const analyser = analyserRef.current;
+    const canvasCtx = canvas?.getContext("2d");
+    if (!canvas || !analyser || !canvasCtx) return;
+
+    const data = new Uint8Array(analyser.frequencyBinCount);
+
+    const draw = () => {
+      if (!analyserRef.current) return; // stopped mid-frame
+      rafRef.current = requestAnimationFrame(draw);
+      analyser.getByteTimeDomainData(data);
+
+      const { width, height } = canvas;
+      canvasCtx.clearRect(0, 0, width, height);
+      canvasCtx.lineWidth = 2;
+      canvasCtx.strokeStyle = "#c17a42"; // clay-500 (canvas can't read CSS vars)
+      canvasCtx.beginPath();
+      const sliceWidth = width / data.length;
+      let x = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = data[i] / 128.0;
+        const y = (v * height) / 2;
+        if (i === 0) canvasCtx.moveTo(x, y);
+        else canvasCtx.lineTo(x, y);
+        x += sliceWidth;
+      }
+      canvasCtx.lineTo(width, height / 2);
+      canvasCtx.stroke();
+    };
+    draw();
+  }
+
+  function stopWaveform() {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+  }
 
   async function startRecording() {
     setError(null);
+    setLastResult(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -54,15 +104,21 @@ export default function AudioRecorder({
       processorRef.current = processor;
       chunksRef.current = [];
 
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyserRef.current = analyser;
+
       processor.onaudioprocess = (e) => {
         chunksRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)));
       };
       source.connect(processor);
       processor.connect(ctx.destination);
+      source.connect(analyser); // parallel tap, visual only — doesn't affect the WAV capture
 
       setRecording(true);
       setSeconds(0);
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
+      drawWaveform();
     } catch {
       setError("Microphone unavailable in this browser/session — use the file upload below.");
     }
@@ -74,6 +130,8 @@ export default function AudioRecorder({
     streamRef.current?.getTracks().forEach((t) => t.stop());
     audioCtxRef.current?.close();
     if (timerRef.current) clearInterval(timerRef.current);
+    stopWaveform();
+    analyserRef.current = null;
     setRecording(false);
 
     if (chunksRef.current.length === 0) return null;
@@ -92,6 +150,7 @@ export default function AudioRecorder({
     setError(null);
     try {
       const result = await api.uploadAudio(visitId, blob);
+      setLastResult(result);
       onDone(result);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -118,7 +177,7 @@ export default function AudioRecorder({
             type="button"
             onClick={startRecording}
             disabled={uploading}
-            className="flex items-center gap-2 rounded-full bg-clay-500 px-4 py-2 text-sm font-semibold text-white hover:bg-clay-600 disabled:opacity-50"
+            className="flex items-center gap-2 rounded-full bg-clay-500 px-4 py-2 text-sm font-semibold text-white transition-transform hover:bg-clay-600 active:scale-95 disabled:opacity-50"
           >
             <span className="h-2.5 w-2.5 rounded-full bg-white" /> Record
           </button>
@@ -126,13 +185,65 @@ export default function AudioRecorder({
           <button
             type="button"
             onClick={handleStop}
-            className="flex items-center gap-2 rounded-full bg-sage-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sage-700"
+            className="flex items-center gap-2 rounded-full bg-sage-600 px-4 py-2 text-sm font-semibold text-white transition-transform hover:bg-sage-700 active:scale-95"
           >
-            <span className="h-2.5 w-2.5 bg-white" /> Stop ({seconds}s)
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-white" />
+            </span>
+            Stop ({seconds}s)
           </button>
         )}
-        {uploading && <span className="text-sm text-sage-600">Uploading + transcribing…</span>}
+
+        <AnimatePresence>
+          {uploading && (
+            <motion.span
+              initial={{ opacity: 0, x: -6 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0 }}
+              className="flex items-center gap-1 text-sm text-sage-600"
+            >
+              Uploading &amp; transcribing
+              <span className="flex gap-0.5">
+                {[0, 1, 2].map((i) => (
+                  <motion.span
+                    key={i}
+                    className="h-1 w-1 rounded-full bg-sage-500"
+                    animate={{ opacity: [0.2, 1, 0.2] }}
+                    transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
+                  />
+                ))}
+              </span>
+            </motion.span>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {!uploading && lastResult && (
+            <motion.span
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex items-center gap-1 text-sm font-medium text-sage-700"
+            >
+              ✓ {lastResult.n_transcript_rows} segment{lastResult.n_transcript_rows === 1 ? "" : "s"} · {lastResult.duration_sec.toFixed(0)}s
+            </motion.span>
+          )}
+        </AnimatePresence>
       </div>
+
+      <AnimatePresence>
+        {recording && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 56 }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden rounded-xl bg-sage-50"
+          >
+            <canvas ref={canvasRef} width={600} height={56} className="h-14 w-full" />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <label className="block text-sm text-sage-700">
         Or upload a .wav file:

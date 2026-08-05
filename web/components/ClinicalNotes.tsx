@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { api, ApiError, ClinicalNote } from "@/lib/api";
 import { Field, TextInput, TextArea, Card } from "@/components/FormField";
 
@@ -53,15 +54,23 @@ export default function ClinicalNotes({
       </div>
 
       <ul className="space-y-2">
-        {notes.map((n) => (
-          <li key={n.note_id} className="rounded-xl bg-sage-50 px-3 py-2">
-            <div className="flex items-baseline justify-between text-xs text-sage-600">
-              <span className="font-medium text-sage-800">{n.author}</span>
-              <span>{new Date(n.created_at).toLocaleString()}</span>
-            </div>
-            <p className="mt-1 text-sm text-ink-900">{n.note_text}</p>
-          </li>
-        ))}
+        <AnimatePresence initial={false}>
+          {notes.map((n) => (
+            <motion.li
+              key={n.note_id}
+              initial={{ opacity: 0, y: -8, height: 0 }}
+              animate={{ opacity: 1, y: 0, height: "auto" }}
+              transition={{ duration: 0.3 }}
+              className="overflow-hidden rounded-xl bg-sage-50 px-3 py-2"
+            >
+              <div className="flex items-baseline justify-between text-xs text-sage-600">
+                <span className="font-medium text-sage-800">{n.author}</span>
+                <span>{new Date(n.created_at).toLocaleString()}</span>
+              </div>
+              <p className="mt-1 text-sm text-ink-900">{n.note_text}</p>
+            </motion.li>
+          ))}
+        </AnimatePresence>
         {notes.length === 0 && <p className="text-sm text-sage-600">No notes yet.</p>}
       </ul>
 

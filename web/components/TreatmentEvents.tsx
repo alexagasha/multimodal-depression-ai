@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { api, ApiError, TreatmentEvent } from "@/lib/api";
 import { Field, Select, TextInput, Card } from "@/components/FormField";
 
@@ -63,15 +64,23 @@ export default function TreatmentEvents({
       </div>
 
       <ul className="space-y-2">
-        {events.map((e) => (
-          <li key={e.event_id} className="rounded-xl bg-sage-50 px-3 py-2">
-            <div className="flex items-baseline justify-between text-xs text-sage-600">
-              <span className="font-medium text-sage-800">{EVENT_TYPE_LABEL[e.event_type]}</span>
-              <span>{new Date(e.event_date).toLocaleDateString()}</span>
-            </div>
-            <p className="mt-1 text-sm text-ink-900">{e.description}</p>
-          </li>
-        ))}
+        <AnimatePresence initial={false}>
+          {events.map((e) => (
+            <motion.li
+              key={e.event_id}
+              initial={{ opacity: 0, y: -8, height: 0 }}
+              animate={{ opacity: 1, y: 0, height: "auto" }}
+              transition={{ duration: 0.3 }}
+              className="overflow-hidden rounded-xl bg-sage-50 px-3 py-2"
+            >
+              <div className="flex items-baseline justify-between text-xs text-sage-600">
+                <span className="font-medium text-sage-800">{EVENT_TYPE_LABEL[e.event_type]}</span>
+                <span>{new Date(e.event_date).toLocaleDateString()}</span>
+              </div>
+              <p className="mt-1 text-sm text-ink-900">{e.description}</p>
+            </motion.li>
+          ))}
+        </AnimatePresence>
         {events.length === 0 && <p className="text-sm text-sage-600">No treatment events recorded.</p>}
       </ul>
 

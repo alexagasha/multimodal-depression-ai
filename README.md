@@ -179,6 +179,12 @@ Auth/RLS/production data platform are still on the roadmap (Phase 4).
 - **Person B:** `src/fusion/`, `src/eval/`, `src/xai/`,
   `docker/`, deployment
 
+## Web app screens
+
+Six screens (patient roster, register patient, patient detail, visit
+workspace, the score modal, and practice analytics) — what each one shows
+and does is documented in [`docs/screens.md`](docs/screens.md).
+
 ## System roadmap
 
 The score model itself is done (only real data + training remain). What's

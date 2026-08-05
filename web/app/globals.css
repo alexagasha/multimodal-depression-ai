@@ -79,6 +79,37 @@ body {
   font-family: var(--font-sans), system-ui, sans-serif;
 }
 
+/* Ambient background blobs (see app/layout.tsx) — a slow, subtle organic
+   drift so the page feels alive even when nothing else is animating.
+   Deliberately gentle: long duration, small travel distance. */
+@keyframes blob-drift-a {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-16px, 20px) scale(1.05); }
+}
+@keyframes blob-drift-b {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(18px, -14px) scale(1.04); }
+}
+.animate-blob-drift-a {
+  animation: blob-drift-a 26s ease-in-out infinite;
+}
+.animate-blob-drift-b {
+  animation: blob-drift-b 32s ease-in-out infinite;
+}
+
+/* Global safety net: anyone who has asked the OS for reduced motion gets it,
+   even in the handful of places using raw CSS animations/transitions above
+   rather than motion/react's useReducedMotion (already respected in
+   Gauge.tsx and useTypewriter.ts). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Print stylesheet: the score-modal "Print / Save PDF" action prints only
    the element marked [data-print-area], stripped of the organic chrome
    (nav, background blobs, buttons) — this is a clinical document, not a

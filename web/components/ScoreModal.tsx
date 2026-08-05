@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion } from "motion/react";
 import { api, ApiError, Review, ScoreResult } from "@/lib/api";
 import Gauge from "@/components/Gauge";
 import RiskBanner from "@/components/RiskBanner";
 import SubtypeDifferential from "@/components/SubtypeDifferential";
 import EvidenceQuotes from "@/components/EvidenceQuotes";
 import PatientSummaryCard from "@/components/PatientSummaryCard";
+import { useTypewriter } from "@/lib/useTypewriter";
 import { Field, TextInput, TextArea } from "@/components/FormField";
 
 const MODALITY_LABEL: Record<string, string> = {
@@ -111,6 +113,77 @@ function ReviewSection({ visitId }: { visitId: string }) {
   );
 }
 
+function AttributionBar({
+  modality,
+  score,
+  index,
+}: {
+  modality: string;
+  score: number;
+  index: number;
+}) {
+  const width = Math.min(100, Math.abs(score) * 100);
+  return (
+    <div className="flex items-center gap-2 text-sm">
+      <span className="w-36 text-sage-700">{MODALITY_LABEL[modality] ?? modality}</span>
+      <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-sage-100">
+        <motion.div
+          className="h-full rounded-full bg-sage-500"
+          initial={{ width: 0 }}
+          animate={{ width: `${width}%` }}
+          transition={{ duration: 0.7, delay: 0.2 + index * 0.12, ease: "easeOut" }}
+        />
+      </div>
+      <span className="w-12 text-right text-sage-600">{score.toFixed(2)}</span>
+    </div>
+  );
+}
+
+function NarrativeCard({ narrative }: { narrative: string }) {
+  const typed = useTypewriter(narrative, 10);
+  return (
+    <div className="rounded-2xl bg-sage-50 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-sage-500">
+        AI-generated commentary — not a diagnosis
+      </p>
+      <p className="mt-1 min-h-[3em] text-sm leading-relaxed text-ink-900">
+        {typed}
+        {typed.length < narrative.length && (
+          <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-sage-400 align-middle" />
+        )}
+      </p>
+    </div>
+  );
+}
+
+function TreatmentSuggestionsCard({ suggestions }: { suggestions: string[] | null }) {
+  return (
+    <div className="rounded-2xl bg-sage-50 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-sage-500">
+        Next-step considerations — AI-suggested, always advisory
+      </p>
+      {!suggestions || suggestions.length === 0 ? (
+        <p className="mt-1 text-sm text-sage-600">
+          Not available — requires an LLM connection (ANTHROPIC_API_KEY).
+        </p>
+      ) : (
+        <ul className="mt-1 list-disc space-y-1 pl-4 text-sm text-ink-900">
+          {suggestions.map((s, i) => (
+            <motion.li
+              key={i}
+              initial={{ opacity: 0, x: -8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.15 * i, duration: 0.35 }}
+            >
+              {s}
+            </motion.li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function ScoreModal({
   result,
   visitId,
@@ -121,8 +194,19 @@ export default function ScoreModal({
   onClose: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4" data-no-print>
-      <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-cream-50 shadow-xl">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-30 flex items-center justify-center bg-black/40 p-4"
+      data-no-print
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.3, ease: "easeOut" }}
+        className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-cream-50 shadow-xl"
+      >
         <div data-print-area className="space-y-5 p-6">
           <h2 className="font-display text-xl font-semibold text-sage-900">Screening result</h2>
 
@@ -131,7 +215,12 @@ export default function ScoreModal({
           <div className="flex items-center justify-around">
             <Gauge label="PHQ-9" value={result.phq9_pred} clinicianValue={result.phq9_clinician} max={27} />
             <Gauge label="HAM-D" value={result.hamd_pred} clinicianValue={result.hamd_clinician} max={44} />
-            <div className="flex flex-col items-center">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.7 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.5, duration: 0.3 }}
+              className="flex flex-col items-center"
+            >
               <span
                 className={`rounded-full px-3 py-1.5 text-sm font-semibold ${
                   result.binary_pred
@@ -142,23 +231,14 @@ export default function ScoreModal({
                 {result.binary_pred ? "Case" : "Non-case"}
               </span>
               <span className="mt-2 text-sm font-medium text-sage-700">Caseness</span>
-            </div>
+            </motion.div>
           </div>
 
           <div>
             <h3 className="font-display text-sm font-semibold text-sage-800">Modality attribution</h3>
             <div className="mt-2 space-y-2">
-              {Object.entries(result.modality_attributions).map(([modality, score]) => (
-                <div key={modality} className="flex items-center gap-2 text-sm">
-                  <span className="w-36 text-sage-700">{MODALITY_LABEL[modality] ?? modality}</span>
-                  <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-sage-100">
-                    <div
-                      className="h-full rounded-full bg-sage-500"
-                      style={{ width: `${Math.min(100, Math.abs(score) * 100)}%` }}
-                    />
-                  </div>
-                  <span className="w-12 text-right text-sage-600">{score.toFixed(2)}</span>
-                </div>
+              {Object.entries(result.modality_attributions).map(([modality, score], i) => (
+                <AttributionBar key={modality} modality={modality} score={score} index={i} />
               ))}
             </div>
             <div className="mt-2">
@@ -166,31 +246,11 @@ export default function ScoreModal({
             </div>
           </div>
 
-          <div className="rounded-2xl bg-sage-50 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-sage-500">
-              AI-generated commentary — not a diagnosis
-            </p>
-            <p className="mt-1 text-sm leading-relaxed text-ink-900">{result.narrative}</p>
-          </div>
+          <NarrativeCard narrative={result.narrative} />
 
           <SubtypeDifferential data={result.subtype_differential} />
 
-          <div className="rounded-2xl bg-sage-50 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-sage-500">
-              Next-step considerations — AI-suggested, always advisory
-            </p>
-            {!result.treatment_suggestions || result.treatment_suggestions.length === 0 ? (
-              <p className="mt-1 text-sm text-sage-600">
-                Not available — requires an LLM connection (ANTHROPIC_API_KEY).
-              </p>
-            ) : (
-              <ul className="mt-1 list-disc space-y-1 pl-4 text-sm text-ink-900">
-                {result.treatment_suggestions.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ul>
-            )}
-          </div>
+          <TreatmentSuggestionsCard suggestions={result.treatment_suggestions} />
 
           <PatientSummaryCard summary={result.patient_summary} />
 
@@ -206,12 +266,12 @@ export default function ScoreModal({
           </button>
           <button
             onClick={onClose}
-            className="rounded-full bg-sage-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sage-600"
+            className="rounded-full bg-sage-500 px-4 py-2 text-sm font-semibold text-white transition-transform hover:bg-sage-600 active:scale-95"
           >
             Close
           </button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }

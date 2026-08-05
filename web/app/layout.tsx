@@ -31,11 +31,11 @@ export default function RootLayout({
     <html lang="en" className={`${nunito.variable} ${quicksand.variable} h-full`}>
       <body className="relative min-h-full overflow-x-hidden bg-cream-50 text-ink-900 antialiased">
         <Blob
-          className="pointer-events-none fixed -right-24 -top-24 h-96 w-96 opacity-60"
+          className="animate-blob-drift-a pointer-events-none fixed -right-24 -top-24 h-96 w-96 opacity-60"
           color="var(--color-sage-100)"
         />
         <Blob
-          className="pointer-events-none fixed -left-32 bottom-0 h-80 w-80 opacity-50"
+          className="animate-blob-drift-b pointer-events-none fixed -left-32 bottom-0 h-80 w-80 opacity-50"
           color="var(--color-clay-100)"
         />
         <div className="relative flex min-h-full flex-col">

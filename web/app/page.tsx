@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { motion, AnimatePresence } from "motion/react";
 import { api, PatientSummary, ApiError, CaseloadQueryResult } from "@/lib/api";
 import EmptyState from "@/components/illustrations/EmptyState";
 
@@ -152,56 +153,67 @@ export default function PatientRosterPage() {
 
       {filtered && filtered.length > 0 && (
         <ul className="space-y-3">
-          {filtered.map((p) => {
-            const isQueryMatch = queryResult?.matching_patient_ids.includes(p.participant_id);
-            return (
-              <li key={p.participant_id} className="relative">
-                {/* Stretched-link pattern (see git history) so the card is one
-                    big click target without nesting <a> inside <a>. */}
-                <div
-                  className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white/70 px-4 py-3 shadow-sm transition hover:shadow-md ${
-                    p.risk_flag
-                      ? "border-[var(--color-danger-border)]"
-                      : isQueryMatch
-                        ? "border-sage-500 ring-2 ring-sage-200"
-                        : "border-sage-200"
-                  }`}
+          <AnimatePresence initial={true}>
+            {filtered.map((p, i) => {
+              const isQueryMatch = queryResult?.matching_patient_ids.includes(p.participant_id);
+              return (
+                <motion.li
+                  key={p.participant_id}
+                  layout
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ delay: Math.min(i, 8) * 0.05, duration: 0.3 }}
+                  className="relative"
                 >
-                  <Link
-                    href={`/patients/${p.participant_id}`}
-                    className="absolute inset-0 z-0"
-                    aria-label={`Open patient ${p.participant_id}`}
-                  />
-                  <div className="relative z-10 flex items-center gap-3">
-                    {p.risk_flag && (
-                      <span className="rounded-full bg-[var(--color-danger)] px-2 py-0.5 text-xs font-bold text-white">
-                        REFERRAL
-                      </span>
-                    )}
-                    <div>
-                      <p className="font-medium text-ink-900">Patient {p.participant_id}</p>
-                      <p className="text-xs text-sage-600">
-                        {p.visit_count} visit{p.visit_count === 1 ? "" : "s"}
-                        {p.last_visit_at &&
-                          ` · last seen ${new Date(p.last_visit_at).toLocaleDateString()}`}
-                      </p>
+                  {/* Stretched-link pattern (see git history) so the card is one
+                      big click target without nesting <a> inside <a>. */}
+                  <div
+                    className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white/70 px-4 py-3 shadow-sm transition hover:shadow-md ${
+                      p.risk_flag
+                        ? "border-[var(--color-danger-border)]"
+                        : isQueryMatch
+                          ? "border-sage-500 ring-2 ring-sage-200"
+                          : "border-sage-200"
+                    }`}
+                  >
+                    <Link
+                      href={`/patients/${p.participant_id}`}
+                      className="absolute inset-0 z-0"
+                      aria-label={`Open patient ${p.participant_id}`}
+                    />
+                    <div className="relative z-10 flex items-center gap-3">
+                      {p.risk_flag && (
+                        <span className="relative flex items-center rounded-full bg-[var(--color-danger)] px-2 py-0.5 text-xs font-bold text-white">
+                          <span className="absolute inset-0 animate-pulse rounded-full bg-[var(--color-danger)] opacity-60" />
+                          <span className="relative">REFERRAL</span>
+                        </span>
+                      )}
+                      <div>
+                        <p className="font-medium text-ink-900">Patient {p.participant_id}</p>
+                        <p className="text-xs text-sage-600">
+                          {p.visit_count} visit{p.visit_count === 1 ? "" : "s"}
+                          {p.last_visit_at &&
+                            ` · last seen ${new Date(p.last_visit_at).toLocaleDateString()}`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="relative z-10 flex flex-wrap items-center justify-end gap-2">
+                      {p.relapse_warning.flag && <TrendBadge label="Worsening trend" />}
+                      {p.risk_trajectory.flag && <TrendBadge label="Rising risk pattern" />}
+                      <ScorePill label="PHQ-9" value={p.phq9_pred} />
+                      <ScorePill label="HAM-D" value={p.hamd_pred} />
+                      {p.visit_count === 0 && (
+                        <span className="rounded-full bg-sage-100 px-2.5 py-1 text-xs font-medium text-sage-700">
+                          No visits yet
+                        </span>
+                      )}
                     </div>
                   </div>
-                  <div className="relative z-10 flex flex-wrap items-center justify-end gap-2">
-                    {p.relapse_warning.flag && <TrendBadge label="Worsening trend" />}
-                    {p.risk_trajectory.flag && <TrendBadge label="Rising risk pattern" />}
-                    <ScorePill label="PHQ-9" value={p.phq9_pred} />
-                    <ScorePill label="HAM-D" value={p.hamd_pred} />
-                    {p.visit_count === 0 && (
-                      <span className="rounded-full bg-sage-100 px-2.5 py-1 text-xs font-medium text-sage-700">
-                        No visits yet
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </li>
-            );
-          })}
+                </motion.li>
+              );
+            })}
+          </AnimatePresence>
         </ul>
       )}
     </div>

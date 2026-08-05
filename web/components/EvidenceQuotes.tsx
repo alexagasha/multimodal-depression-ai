@@ -1,3 +1,6 @@
+"use client";
+
+import { motion } from "motion/react";
 import { EvidenceResult } from "@/lib/api";
 
 const MODALITY_LABEL: Record<string, string> = {
@@ -27,7 +30,15 @@ export default function EvidenceQuotes({ data }: { data: EvidenceResult | null }
           </p>
           <ul className="mt-1 space-y-1">
             {data.quotes.map((q, i) => (
-              <li key={i} className="text-sm italic text-ink-700">&ldquo;{q}&rdquo;</li>
+              <motion.li
+                key={i}
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.12 * i, duration: 0.3 }}
+                className="text-sm italic text-ink-700"
+              >
+                &ldquo;{q}&rdquo;
+              </motion.li>
             ))}
           </ul>
         </>
