@@ -44,16 +44,20 @@ downstream needs to be touched once real weights are trained.
 **The rest of the system (backend API, web app, live audio, data platform,
 deploy) is being built out beyond the score model itself.** A local FastAPI
 backend (`api/`) and a real Next.js + Tailwind web app (`web/`, organic
-sage/clay theme, hand-authored SVG assets) exercise the full loop: triage
-dashboard (risk-flagged sessions first) → participant intake with consent →
-live mic recording (real `getUserMedia`/`AudioContext` WAV capture, with a
+sage/clay theme, hand-authored SVG assets) frame the tool the way a
+clinician would actually use it in practice — not a research data-collection
+form. The core loop is a **patient roster**, not a one-off intake pipeline:
+register a patient once, then start a new visit any time they come back;
+referral-flagged patients float to the top of the roster. Each visit: live
+mic recording (real `getUserMedia`/`AudioContext` WAV capture, with a
 file-upload fallback) → PHQ-9/HAM-D scale responses with per-item read-aloud
 (referral flag fires immediately, independent of the model) → scoring → the
-score modal (gauges, XAI attribution bars, a GenUI narrative, a clinician
-review/adjust action, print-to-PDF) → append-only clinical notes → a
-longitudinal trend view across a participant's repeat sessions. See the
-phased roadmap for what's next (DSM-5-grounded RAG and the Firebase
-production deploy).
+score modal, which shows the **AI estimate next to the clinician's own
+administered score** — the AI runs as a second opinion, not a replacement
+(gauges, XAI attribution bars, a GenUI narrative, a clinician review/adjust
+action, print-to-PDF) → append-only clinical notes → a longitudinal severity
+trend across the patient's visit history. See the phased roadmap for what's
+next (DSM-5-grounded RAG and the Firebase production deploy).
 
 ## Directory structure
 
@@ -88,9 +92,9 @@ depression-detection/
 │   ├── storage.py                       # local JSON store (Firestore-shaped; swaps in Phase 4)
 │   └── genui.py                         # score-modal narrative (Claude, template fallback)
 ├── web/                                 # Next.js + TypeScript + Tailwind app (organic theme)
-│   ├── app/                             # dashboard, intake, sessions/[id], participants/[id]
+│   ├── app/                             # patient roster (/), patients/new, patients/[id], visits/[id]
 │   ├── components/                      # ScaleForm, AudioRecorder, ScoreModal, ClinicalNotes, …
-│   └── lib/                             # typed API client + draft-autosave hook
+│   └── lib/                             # typed API client (patient/visit naming) + draft-autosave hook
 ├── tests/
 │   ├── test_end_to_end.py               # pipeline smoke tests on synthetic data
 │   └── test_api.py                      # full local API flow
@@ -132,11 +136,12 @@ one-off batch scoring job instead). Optional env vars: `ANTHROPIC_API_KEY`
 `NEXT_PUBLIC_API_BASE` for the frontend (defaults to `http://localhost:8000`).
 
 This exercises the same vertical slice as the smoke test above, but through
-the real UI: triage dashboard → intake → live mic recording or file upload →
-PHQ-9/HAM-D scales → scoring → the score modal → clinical notes → the
-participant trend view. No Firebase account or cloud credentials needed —
-everything runs against the local JSON store. Auth/RLS/production data
-platform are still on the roadmap (Phase 4).
+the real clinical-practice UI: patient roster → register a patient → live
+mic recording or file upload → PHQ-9/HAM-D scales → scoring → the score
+modal (AI estimate alongside the clinician's own score) → clinical notes →
+the patient's visit history and severity trend. No Firebase account or cloud
+credentials needed — everything runs against the local JSON store.
+Auth/RLS/production data platform are still on the roadmap (Phase 4).
 
 ## When E-DAIC-WOZ access clears
 

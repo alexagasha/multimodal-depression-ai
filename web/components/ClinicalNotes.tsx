@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, ClinicalNote } from "@/lib/api";
 import { Field, TextInput, TextArea, Card } from "@/components/FormField";
 
-export default function ClinicalNotes({ sessionId }: { sessionId: string }) {
+export default function ClinicalNotes({ visitId }: { visitId: string }) {
   const [notes, setNotes] = useState<ClinicalNote[]>([]);
   const [author, setAuthor] = useState("");
   const [text, setText] = useState("");
@@ -12,10 +12,10 @@ export default function ClinicalNotes({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   function refresh() {
-    api.listNotes(sessionId).then(setNotes).catch(() => {});
+    api.listNotes(visitId).then(setNotes).catch(() => {});
   }
 
-  useEffect(refresh, [sessionId]);
+  useEffect(refresh, [visitId]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -23,7 +23,7 @@ export default function ClinicalNotes({ sessionId }: { sessionId: string }) {
     setSubmitting(true);
     setError(null);
     try {
-      await api.addNote(sessionId, author.trim(), text.trim());
+      await api.addNote(visitId, author.trim(), text.trim());
       setText("");
       refresh();
     } catch (e) {

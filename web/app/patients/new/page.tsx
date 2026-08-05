@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, ApiError, ParticipantIn } from "@/lib/api";
+import { api, ApiError, PatientIn } from "@/lib/api";
 import { Field, Select, Card } from "@/components/FormField";
 import { useDraftAutosave } from "@/lib/useDraftAutosave";
 
-const DEFAULT: ParticipantIn = {
+const DEFAULT: PatientIn = {
   age_band: "26-35",
   sex: "female",
   marital_status: "married",
@@ -18,7 +18,7 @@ const DEFAULT: ParticipantIn = {
   site: "butabika",
 };
 
-const OPTIONS: Record<keyof ParticipantIn, { value: string; label: string }[]> = {
+const OPTIONS: Record<keyof PatientIn, { value: string; label: string }[]> = {
   age_band: ["18-25", "26-35", "36-45", "46-55", "56-65"].map((v) => ({ value: v, label: v })),
   sex: [
     { value: "female", label: "Female" },
@@ -63,7 +63,7 @@ const OPTIONS: Record<keyof ParticipantIn, { value: string; label: string }[]> =
   ],
 };
 
-const LABELS: Record<keyof ParticipantIn, string> = {
+const LABELS: Record<keyof PatientIn, string> = {
   age_band: "Age band",
   sex: "Sex",
   marital_status: "Marital status",
@@ -75,9 +75,9 @@ const LABELS: Record<keyof ParticipantIn, string> = {
   site: "Site",
 };
 
-export default function IntakePage() {
+export default function RegisterPatientPage() {
   const router = useRouter();
-  const [form, setForm, clearDraft] = useDraftAutosave<ParticipantIn>("intake", DEFAULT);
+  const [form, setForm, clearDraft] = useDraftAutosave<PatientIn>("register-patient", DEFAULT);
   const [consented, setConsented] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,10 +87,10 @@ export default function IntakePage() {
     setSubmitting(true);
     setError(null);
     try {
-      const { participant_id } = await api.createParticipant(form);
-      const { session_id } = await api.createSession(participant_id);
+      const { participant_id } = await api.registerPatient(form);
+      const { session_id } = await api.startVisit(participant_id);
       clearDraft();
-      router.push(`/sessions/${session_id}`);
+      router.push(`/visits/${session_id}`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
       setSubmitting(false);
@@ -101,15 +101,17 @@ export default function IntakePage() {
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
         <h1 className="font-display text-2xl font-semibold text-sage-900">
-          New participant intake
+          Register new patient
         </h1>
-        <p className="text-sm text-sage-700">Section A demographics, then a new session begins.</p>
+        <p className="text-sm text-sage-700">
+          Section A demographics, then their first visit begins.
+        </p>
       </div>
 
       <Card>
         <h2 className="font-display text-base font-semibold text-sage-800">Informed consent</h2>
         <p className="mt-2 text-sm leading-relaxed text-ink-700">
-          This session records interview audio and demographic details to produce an AI-assisted
+          This visit records interview audio and demographic details to produce an AI-assisted
           PHQ-9/HAM-D severity estimate for clinician review — it does not replace a clinical
           diagnosis. Data is de-identified for the model (site, tribe, and other provenance
           fields are kept separate from the scoring pipeline). Participation is voluntary and can
@@ -122,14 +124,14 @@ export default function IntakePage() {
             onChange={(e) => setConsented(e.target.checked)}
             className="mt-0.5 h-4 w-4 rounded border-sage-300 text-sage-600 focus:ring-sage-400"
           />
-          The participant has been informed and consents to proceed.
+          The patient has been informed and consents to proceed.
         </label>
       </Card>
 
       <form onSubmit={onSubmit}>
         <Card className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
-            {(Object.keys(DEFAULT) as (keyof ParticipantIn)[]).map((key) => (
+            {(Object.keys(DEFAULT) as (keyof PatientIn)[]).map((key) => (
               <Field key={key} label={LABELS[key]}>
                 <Select
                   value={form[key]}
@@ -157,7 +159,7 @@ export default function IntakePage() {
             disabled={!consented || submitting}
             className="w-full rounded-full bg-sage-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-sage-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {submitting ? "Creating session…" : "Create participant & session"}
+            {submitting ? "Starting visit…" : "Register patient & start visit"}
           </button>
         </Card>
       </form>

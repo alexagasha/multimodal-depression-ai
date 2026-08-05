@@ -1,16 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { api, SessionSummary, ApiError } from "@/lib/api";
+import { api, PatientSummary, ApiError } from "@/lib/api";
 import EmptyState from "@/components/illustrations/EmptyState";
-
-const STATUS_LABEL: Record<string, string> = {
-  created: "Intake complete",
-  scale_responses_recorded: "Scales recorded",
-  audio_uploaded: "Audio uploaded",
-  scored: "Scored",
-};
 
 function ScorePill({ label, value }: { label: string; value: number | null }) {
   return (
@@ -20,35 +13,53 @@ function ScorePill({ label, value }: { label: string; value: number | null }) {
   );
 }
 
-export default function DashboardPage() {
-  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+export default function PatientRosterPage() {
+  const [patients, setPatients] = useState<PatientSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     api
-      .listSessions()
-      .then(setSessions)
+      .listPatients()
+      .then(setPatients)
       .catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
   }, []);
+
+  const filtered = useMemo(() => {
+    if (!patients) return null;
+    const q = query.trim().toLowerCase();
+    if (!q) return patients;
+    return patients.filter((p) => p.participant_id.toLowerCase().includes(q));
+  }, [patients, query]);
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold text-sage-900">
-            Triage queue
+            Patients
           </h1>
           <p className="text-sm text-sage-700">
-            Referral-flagged sessions first, then by severity.
+            Referral-flagged patients first, then by severity of their latest visit.
           </p>
         </div>
         <Link
-          href="/intake"
+          href="/patients/new"
           className="rounded-full bg-sage-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sage-600"
         >
-          + New session
+          + Register new patient
         </Link>
       </div>
+
+      {patients && patients.length > 0 && (
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by patient ID…"
+          className="w-full max-w-sm rounded-xl border border-sage-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-sage-500 focus:outline-none focus:ring-2 focus:ring-sage-200"
+        />
+      )}
 
       {error && (
         <div className="rounded-xl border border-[var(--color-danger-border)] bg-[var(--color-danger-bg)] px-4 py-3 text-sm text-[var(--color-danger)]">
@@ -56,71 +67,65 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {sessions && sessions.length === 0 && (
+      {patients && patients.length === 0 && (
         <div className="flex flex-col items-center gap-3 rounded-3xl border border-sage-200 bg-white/60 px-6 py-16 text-center">
           <EmptyState />
-          <p className="font-display text-lg text-sage-800">No sessions yet</p>
+          <p className="font-display text-lg text-sage-800">No patients yet</p>
           <p className="max-w-sm text-sm text-sage-600">
-            Start a new intake to register a participant and begin a screening session.
+            Register a patient to begin their first visit.
           </p>
           <Link
-            href="/intake"
+            href="/patients/new"
             className="mt-2 rounded-full bg-sage-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sage-600"
           >
-            + New session
+            + Register new patient
           </Link>
         </div>
       )}
 
-      {sessions && sessions.length > 0 && (
+      {filtered && filtered.length === 0 && patients && patients.length > 0 && (
+        <p className="text-sm text-sage-600">No patients match &ldquo;{query}&rdquo;.</p>
+      )}
+
+      {filtered && filtered.length > 0 && (
         <ul className="space-y-3">
-          {sessions.map((s) => (
-            <li key={s.session_id} className="relative">
-              {/* "Stretched link" pattern: the session Link covers the whole
-                  card via absolute inset-0, while the nested "view history"
-                  link sits above it (relative + higher stacking context) so
-                  both remain independently clickable without nesting <a>
-                  inside <a>, which is invalid HTML and breaks hydration. */}
+          {filtered.map((p) => (
+            <li key={p.participant_id} className="relative">
+              {/* Stretched-link pattern (see git history) so the card is one
+                  big click target without nesting <a> inside <a>. */}
               <div
                 className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white/70 px-4 py-3 shadow-sm transition hover:shadow-md ${
-                  s.risk_flag ? "border-[var(--color-danger-border)]" : "border-sage-200"
+                  p.risk_flag ? "border-[var(--color-danger-border)]" : "border-sage-200"
                 }`}
               >
                 <Link
-                  href={`/sessions/${s.session_id}`}
+                  href={`/patients/${p.participant_id}`}
                   className="absolute inset-0 z-0"
-                  aria-label={`Open session ${s.session_id}`}
+                  aria-label={`Open patient ${p.participant_id}`}
                 />
                 <div className="relative z-10 flex items-center gap-3">
-                  {s.risk_flag && (
+                  {p.risk_flag && (
                     <span className="rounded-full bg-[var(--color-danger)] px-2 py-0.5 text-xs font-bold text-white">
                       REFERRAL
                     </span>
                   )}
                   <div>
-                    <p className="font-medium text-ink-900">Session {s.session_id}</p>
+                    <p className="font-medium text-ink-900">Patient {p.participant_id}</p>
                     <p className="text-xs text-sage-600">
-                      Participant {s.participant_id} ·{" "}
-                      <Link
-                        href={`/participants/${s.participant_id}`}
-                        className="relative z-10 underline decoration-sage-300 hover:text-sage-800"
-                      >
-                        view history
-                      </Link>
+                      {p.visit_count} visit{p.visit_count === 1 ? "" : "s"}
+                      {p.last_visit_at &&
+                        ` · last seen ${new Date(p.last_visit_at).toLocaleDateString()}`}
                     </p>
                   </div>
                 </div>
                 <div className="relative z-10 flex items-center gap-2">
-                  <ScorePill label="PHQ-9" value={s.phq9_pred} />
-                  <ScorePill label="HAM-D" value={s.hamd_pred} />
-                  {s.reviewed && (
-                    <span className="rounded-full bg-clay-100 px-2.5 py-1 text-xs font-medium text-clay-600">
-                      Reviewed
+                  <ScorePill label="PHQ-9" value={p.phq9_pred} />
+                  <ScorePill label="HAM-D" value={p.hamd_pred} />
+                  {p.visit_count === 0 && (
+                    <span className="rounded-full bg-sage-100 px-2.5 py-1 text-xs font-medium text-sage-700">
+                      No visits yet
                     </span>
                   )}
-                  <span className="rounded-full bg-sage-100 px-2.5 py-1 text-xs font-medium text-sage-700">
-                    {STATUS_LABEL[s.status] ?? s.status}
-                  </span>
                 </div>
               </div>
             </li>

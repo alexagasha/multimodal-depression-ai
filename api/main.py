@@ -40,6 +40,7 @@ from src.xai.attribution import explain_participant
 from src.safety.risk_flag import flag_risk
 from api.storage import store
 from api.genui import generate_narrative
+from api.subtype_differential import generate_differential
 
 LIVE_DATA_ROOT = os.path.join(os.path.dirname(__file__), "..", "data", "live", "sessions")
 WEIGHTS_PATH = os.path.join(os.path.dirname(__file__), "..", "outputs", "weights", "fusion_head.npz")
@@ -143,12 +144,61 @@ def _triage_sort_key(session: dict):
     )
 
 
+def _enrich_participant(participant: dict) -> dict:
+    """Join a patient record with their visit history: visit count, most
+    recent visit date, and that visit's risk_flag/scores — powers the
+    patient roster so a clinician sees who needs attention without opening
+    each patient individually."""
+    visits = [s for s in store.list("sessions") if s["participant_id"] == participant["participant_id"]]
+    visits.sort(key=lambda s: s.get("created_at") or "")
+    latest = visits[-1] if visits else None
+    latest_enriched = _enrich_session(latest) if latest else None
+    return {
+        **participant,
+        "visit_count": len(visits),
+        "last_visit_at": latest["created_at"] if latest else None,
+        "risk_flag": latest_enriched["risk_flag"] if latest_enriched else None,
+        "phq9_pred": latest_enriched["phq9_pred"] if latest_enriched else None,
+        "hamd_pred": latest_enriched["hamd_pred"] if latest_enriched else None,
+    }
+
+
+def _patient_sort_key(patient: dict):
+    # Same risk-first logic as _triage_sort_key, applied to each patient's
+    # most recent visit. Patients with no visits yet sort last.
+    return (
+        0 if patient.get("risk_flag") else 1,
+        -(patient["hamd_pred"] if patient.get("hamd_pred") is not None else -1),
+        patient.get("last_visit_at") is None,
+        patient.get("last_visit_at") or "",
+    )
+
+
 @app.post("/participants")
 def create_participant(body: ParticipantIn):
     participant_id = uuid.uuid4().hex[:10]
     record = {"participant_id": participant_id, **body.model_dump()}
     store.set("participants", participant_id, record)
     return {"participant_id": participant_id}
+
+
+@app.get("/participants")
+def list_participants():
+    """Patient roster: every registered patient enriched with visit count
+    and their latest visit's risk_flag/scores, risk-flagged patients first.
+    This is the clinical landing view — find or start a patient's next visit
+    without already knowing a session link."""
+    patients = [_enrich_participant(p) for p in store.list("participants")]
+    patients.sort(key=_patient_sort_key)
+    return patients
+
+
+@app.get("/participants/{participant_id}")
+def get_participant(participant_id: str):
+    participant = store.get("participants", participant_id)
+    if participant is None:
+        raise HTTPException(404, f"participant {participant_id} not found")
+    return _enrich_participant(participant)
 
 
 @app.post("/sessions")
@@ -240,11 +290,22 @@ def score_session(session_id: str):
         scores["phq9"], scores["hamd"], binary_pred,
         xai["modality_attributions"], risk_flag, HAMD_CASENESS_THRESHOLD,
     )
+    transcript_text = " ".join(seg["text"] for seg in segments if seg.get("text"))
+    subtype_differential = generate_differential(transcript_text)
 
     result = {
         "session_id": session_id,
         "phq9_pred": round(float(scores["phq9"]), 3),
         "hamd_pred": round(float(scores["hamd"]), 3),
+        # Clinician-administered totals, surfaced alongside the AI estimate
+        # rather than replaced by it — the AI runs as a second opinion, not
+        # a substitute for the clinician's own PHQ-9/HAM-D scoring.
+        "phq9_clinician": scale["phq9_total"],
+        "hamd_clinician": scale["hamd_total"],
+        # None when unavailable (no ANTHROPIC_API_KEY) — see
+        # api/subtype_differential.py's docstring for why there's no
+        # non-LLM fallback here, unlike the narrative above.
+        "subtype_differential": subtype_differential,
         "binary_pred": binary_pred,
         "risk_flag": risk_flag,
         "modality_attributions": xai["modality_attributions"],

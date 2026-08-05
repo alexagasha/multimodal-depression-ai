@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, ScoreResult, SessionSummary } from "@/lib/api";
+import { api, ApiError, ScoreResult, VisitSummary } from "@/lib/api";
 import SessionStatusStepper from "@/components/SessionStatusStepper";
 import RiskBanner from "@/components/RiskBanner";
 import ScaleForm from "@/components/ScaleForm";
@@ -12,34 +12,34 @@ import ClinicalNotes from "@/components/ClinicalNotes";
 import ScoreModal from "@/components/ScoreModal";
 import { Card } from "@/components/FormField";
 
-export default function SessionWorkspacePage() {
+export default function VisitWorkspacePage() {
   const { id } = useParams<{ id: string }>();
-  const [session, setSession] = useState<SessionSummary | null>(null);
+  const [visit, setVisit] = useState<VisitSummary | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [scoring, setScoring] = useState(false);
   const [scoreError, setScoreError] = useState<string | null>(null);
   const [result, setResult] = useState<ScoreResult | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
 
-  function refreshSession() {
+  function refreshVisit() {
     api
-      .getSession(id)
-      .then(setSession)
+      .getVisit(id)
+      .then(setVisit)
       .catch((e) => {
         if (e instanceof ApiError && e.status === 404) setNotFound(true);
       });
   }
 
-  useEffect(refreshSession, [id]);
+  useEffect(refreshVisit, [id]);
 
   async function runScoring() {
     setScoring(true);
     setScoreError(null);
     try {
-      const r = await api.scoreSession(id);
+      const r = await api.scoreVisit(id);
       setResult(r);
       setModalOpen(true);
-      refreshSession();
+      refreshVisit();
     } catch (e) {
       setScoreError(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -48,17 +48,17 @@ export default function SessionWorkspacePage() {
   }
 
   async function viewLastResult() {
-    const r = await api.getResults(id);
+    const r = await api.getVisitResults(id);
     setResult(r);
     setModalOpen(true);
   }
 
   if (notFound) {
-    return <p className="text-sm text-sage-700">Session {id} not found.</p>;
+    return <p className="text-sm text-sage-700">Visit {id} not found.</p>;
   }
 
-  if (!session) {
-    return <p className="text-sm text-sage-700">Loading session…</p>;
+  if (!visit) {
+    return <p className="text-sm text-sage-700">Loading visit…</p>;
   }
 
   return (
@@ -66,16 +66,16 @@ export default function SessionWorkspacePage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold text-sage-900">
-            Session {session.session_id}
+            Visit {visit.session_id}
           </h1>
           <p className="text-sm text-sage-700">
-            Participant {session.participant_id} ·{" "}
-            <Link href={`/participants/${session.participant_id}`} className="underline decoration-sage-300">
-              view history
+            Patient {visit.participant_id} ·{" "}
+            <Link href={`/patients/${visit.participant_id}`} className="underline decoration-sage-300">
+              view record
             </Link>
           </p>
         </div>
-        {session.status === "scored" && (
+        {visit.status === "scored" && (
           <button
             onClick={viewLastResult}
             className="rounded-full border border-sage-300 px-4 py-2 text-sm font-medium text-sage-700 hover:bg-sage-100"
@@ -86,14 +86,14 @@ export default function SessionWorkspacePage() {
       </div>
 
       <Card>
-        <SessionStatusStepper status={session.status} />
+        <SessionStatusStepper status={visit.status} />
       </Card>
 
-      {session.risk_flag && <RiskBanner />}
+      {visit.risk_flag && <RiskBanner />}
 
-      <ScaleForm sessionId={id} onDone={() => refreshSession()} />
+      <ScaleForm visitId={id} onDone={() => refreshVisit()} />
 
-      <AudioRecorder sessionId={id} onDone={() => refreshSession()} />
+      <AudioRecorder visitId={id} onDone={() => refreshVisit()} />
 
       <Card className="space-y-3">
         <h2 className="font-display text-lg font-semibold text-sage-800">Score</h2>
@@ -111,10 +111,10 @@ export default function SessionWorkspacePage() {
         )}
       </Card>
 
-      <ClinicalNotes sessionId={id} />
+      <ClinicalNotes visitId={id} />
 
       {modalOpen && result && (
-        <ScoreModal result={result} sessionId={id} onClose={() => setModalOpen(false)} />
+        <ScoreModal result={result} visitId={id} onClose={() => setModalOpen(false)} />
       )}
     </div>
   );

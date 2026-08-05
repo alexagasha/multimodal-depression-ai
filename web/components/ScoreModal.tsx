@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, Review, ScoreResult } from "@/lib/api";
 import Gauge from "@/components/Gauge";
 import RiskBanner from "@/components/RiskBanner";
+import SubtypeDifferential from "@/components/SubtypeDifferential";
 import { Field, TextInput, TextArea } from "@/components/FormField";
 
 const MODALITY_LABEL: Record<string, string> = {
@@ -12,7 +13,7 @@ const MODALITY_LABEL: Record<string, string> = {
   metadata: "Metadata",
 };
 
-function ReviewSection({ sessionId }: { sessionId: string }) {
+function ReviewSection({ visitId }: { visitId: string }) {
   const [review, setReview] = useState<Review | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [reviewer, setReviewer] = useState("");
@@ -24,11 +25,11 @@ function ReviewSection({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getReview(sessionId).then((r) => {
+    api.getReview(visitId).then((r) => {
       setReview(r);
       setLoaded(true);
     });
-  }, [sessionId]);
+  }, [visitId]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -36,7 +37,7 @@ function ReviewSection({ sessionId }: { sessionId: string }) {
     setSubmitting(true);
     setError(null);
     try {
-      const saved = await api.submitReview(sessionId, {
+      const saved = await api.submitReview(visitId, {
         reviewer: reviewer.trim(),
         agrees,
         adjusted_phq9: adjustedPhq9 ? Number(adjustedPhq9) : null,
@@ -110,11 +111,11 @@ function ReviewSection({ sessionId }: { sessionId: string }) {
 
 export default function ScoreModal({
   result,
-  sessionId,
+  visitId,
   onClose,
 }: {
   result: ScoreResult;
-  sessionId: string;
+  visitId: string;
   onClose: () => void;
 }) {
   return (
@@ -126,8 +127,8 @@ export default function ScoreModal({
           {result.risk_flag && <RiskBanner />}
 
           <div className="flex items-center justify-around">
-            <Gauge label="PHQ-9" value={result.phq9_pred} max={27} />
-            <Gauge label="HAM-D" value={result.hamd_pred} max={44} />
+            <Gauge label="PHQ-9" value={result.phq9_pred} clinicianValue={result.phq9_clinician} max={27} />
+            <Gauge label="HAM-D" value={result.hamd_pred} clinicianValue={result.hamd_clinician} max={44} />
             <div className="flex flex-col items-center">
               <span
                 className={`rounded-full px-3 py-1.5 text-sm font-semibold ${
@@ -167,7 +168,9 @@ export default function ScoreModal({
             <p className="mt-1 text-sm leading-relaxed text-ink-900">{result.narrative}</p>
           </div>
 
-          <ReviewSection sessionId={sessionId} />
+          <SubtypeDifferential data={result.subtype_differential} />
+
+          <ReviewSection visitId={visitId} />
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-sage-200 px-6 py-4" data-no-print>

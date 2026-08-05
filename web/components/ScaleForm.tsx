@@ -38,13 +38,13 @@ function ListenButton({ itemKey }: { itemKey: keyof typeof ITEM_SPEECH }) {
 }
 
 export default function ScaleForm({
-  sessionId,
+  visitId,
   onDone,
 }: {
-  sessionId: string;
+  visitId: string;
   onDone: (riskFlag: boolean) => void;
 }) {
-  const [form, setForm, clearDraft] = useDraftAutosave<ScaleResponsesIn>(`scales:${sessionId}`, {
+  const [form, setForm, clearDraft] = useDraftAutosave<ScaleResponsesIn>(`scales:${visitId}`, {
     phq9_total: 0,
     hamd_total: 0,
     phq9_item9: 0,
@@ -59,7 +59,7 @@ export default function ScaleForm({
     setSubmitting(true);
     setError(null);
     try {
-      const { risk_flag } = await api.submitScaleResponses(sessionId, form);
+      const { risk_flag } = await api.submitScaleResponses(visitId, form);
       setRiskFlag(risk_flag);
       clearDraft();
       onDone(risk_flag);

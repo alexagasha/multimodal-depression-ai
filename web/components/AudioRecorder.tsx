@@ -16,10 +16,10 @@ import { Card } from "@/components/FormField";
  * Falls back to a plain file upload when the microphone isn't available.
  */
 export default function AudioRecorder({
-  sessionId,
+  visitId,
   onDone,
 }: {
-  sessionId: string;
+  visitId: string;
   onDone: (info: { duration_sec: number; n_transcript_rows: number }) => void;
 }) {
   const [recording, setRecording] = useState(false);
@@ -91,7 +91,7 @@ export default function AudioRecorder({
     setUploading(true);
     setError(null);
     try {
-      const result = await api.uploadAudio(sessionId, blob);
+      const result = await api.uploadAudio(visitId, blob);
       onDone(result);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));

@@ -1,16 +1,16 @@
-import { SessionSummary } from "@/lib/api";
+import { VisitSummary } from "@/lib/api";
 
 const WIDTH = 420;
 const HEIGHT = 150;
 const PAD = 24;
 
-export default function TrendSparkline({ sessions }: { sessions: SessionSummary[] }) {
-  const scored = sessions.filter((s) => s.phq9_pred !== null && s.hamd_pred !== null);
+export default function TrendSparkline({ visits }: { visits: VisitSummary[] }) {
+  const scored = visits.filter((s) => s.phq9_pred !== null && s.hamd_pred !== null);
 
   if (scored.length < 2) {
     return (
       <p className="text-sm text-sage-600">
-        Need at least two scored sessions for this participant to show a trend.
+        Need at least two scored visits for this patient to show a trend.
       </p>
     );
   }

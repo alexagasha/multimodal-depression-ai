@@ -70,11 +70,16 @@ def test_full_session_flow(client):
     r = client.post(f"/sessions/{session_id}/score")
     assert r.status_code == 200
     result = r.json()
-    for key in ("phq9_pred", "hamd_pred", "binary_pred", "risk_flag",
-                "modality_attributions", "narrative"):
+    for key in ("phq9_pred", "hamd_pred", "phq9_clinician", "hamd_clinician",
+                "binary_pred", "risk_flag", "modality_attributions", "narrative",
+                "subtype_differential"):
         assert key in result
     assert result["risk_flag"] is True  # carried through from scale-responses, not recomputed differently
+    assert result["phq9_clinician"] == 15  # the clinician-entered total, surfaced alongside the AI estimate
+    assert result["hamd_clinician"] == 20
     assert set(result["modality_attributions"]) == {"text", "audio", "metadata"}
+    # No ANTHROPIC_API_KEY in the test environment -> unavailable, not fabricated.
+    assert result["subtype_differential"] is None
 
     r = client.get(f"/sessions/{session_id}/results")
     assert r.status_code == 200
@@ -246,3 +251,75 @@ def test_get_single_session(client):
     assert body["phq9_pred"] is not None
 
     assert client.get("/sessions/doesnotexist").status_code == 404
+
+
+def test_patient_roster_orders_risk_first_and_counts_visits(client):
+    """GET /participants powers the clinical roster: risk-flagged patients
+    float to the top, and each patient shows their visit count + latest
+    scores without the frontend needing per-patient follow-up fetches."""
+    stable_patient, _ = _run_full_session(client, phq9_item9=0, hamd_suicide_item=0)
+    flagged_patient, _ = _run_full_session(client, phq9_item9=2, hamd_suicide_item=0)
+    # A second visit for the stable patient — visit_count should reflect both.
+    _run_full_session(client, participant_id=stable_patient)
+
+    r = client.get("/participants")
+    assert r.status_code == 200
+    roster = r.json()
+    ids_in_order = [p["participant_id"] for p in roster]
+    assert ids_in_order.index(flagged_patient) < ids_in_order.index(stable_patient)
+
+    stable_entry = next(p for p in roster if p["participant_id"] == stable_patient)
+    assert stable_entry["visit_count"] == 2
+    assert stable_entry["risk_flag"] is False
+    assert stable_entry["phq9_pred"] is not None
+
+    flagged_entry = next(p for p in roster if p["participant_id"] == flagged_patient)
+    assert flagged_entry["visit_count"] == 1
+    assert flagged_entry["risk_flag"] is True
+
+
+def test_get_single_participant(client):
+    r = client.post("/participants", json=PARTICIPANT_BODY)
+    participant_id = r.json()["participant_id"]
+
+    r = client.get(f"/participants/{participant_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["participant_id"] == participant_id
+    assert body["visit_count"] == 0
+    assert body["last_visit_at"] is None
+    assert body["risk_flag"] is None
+
+    assert client.get("/participants/doesnotexist").status_code == 404
+
+
+def test_subtype_differential_unavailable_without_api_key(monkeypatch):
+    """No non-LLM fallback by design (see api/subtype_differential.py's
+    docstring) — must return None, not a fabricated differential, when
+    ANTHROPIC_API_KEY isn't set."""
+    from api.subtype_differential import generate_differential
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert generate_differential("I feel low most days and can't sleep.") is None
+
+
+def test_subtype_differential_unavailable_for_empty_transcript(monkeypatch):
+    from api.subtype_differential import generate_differential
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    assert generate_differential("") is None
+    assert generate_differential("   ") is None
+
+
+def test_subtype_differential_validates_model_output():
+    from api.subtype_differential import SUBTYPE_CRITERIA, _validate
+
+    good = {name: {"likelihood": "possible", "rationale": "x"} for name in SUBTYPE_CRITERIA}
+    validated = _validate(good)
+    assert set(validated) == set(SUBTYPE_CRITERIA)
+
+    with pytest.raises(ValueError):
+        _validate({name: {"likelihood": "definitely"} for name in SUBTYPE_CRITERIA})  # bad enum
+
+    with pytest.raises(ValueError):
+        _validate({})  # missing entries

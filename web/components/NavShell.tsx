@@ -5,8 +5,8 @@ import { usePathname } from "next/navigation";
 import Leaf from "./illustrations/Leaf";
 
 const LINKS = [
-  { href: "/", label: "Dashboard" },
-  { href: "/intake", label: "New session" },
+  { href: "/", label: "Patients" },
+  { href: "/patients/new", label: "Register patient" },
 ];
 
 export default function NavShell() {
