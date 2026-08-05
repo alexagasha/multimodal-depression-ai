@@ -46,35 +46,167 @@ export default function AudioRecorder({
 
   useEffect(() => stopWaveform, []);
 
+  // The <canvas> only mounts once `recording` is true (see JSX below), and
+  // that state update isn't reflected in the DOM until after this render
+  // commits — so the draw loop has to kick off from an effect (once the
+  // canvas ref is actually populated), not synchronously inside
+  // startRecording(), or canvasRef.current is still null and drawWaveform()
+  // silently no-ops forever.
+  useEffect(() => {
+    if (recording) drawWaveform();
+  }, [recording]);
+
+  /**
+   * Renders a scrolling, layered "mesh" waveform modeled on 3D-soundwave
+   * artwork: nested glowing contour lines over a dark backdrop, warm sage ->
+   * clay gradient, with a bright cream filament tracing the outer crest.
+   *
+   * Plots loudness over TIME (a scrolling history buffer fed by RMS of the
+   * time-domain data), not frequency across x — voice energy sits almost
+   * entirely in the low bins, so a spectrum layout leaves most of the width
+   * permanently dead, whereas a time plot gives varied peaks the whole way
+   * across. Three parallax layers read the same history at slightly
+   * different lags, so their crests offset and the wave gains depth.
+   */
   function drawWaveform() {
     const canvas = canvasRef.current;
     const analyser = analyserRef.current;
     const canvasCtx = canvas?.getContext("2d");
     if (!canvas || !analyser || !canvasCtx) return;
 
-    const data = new Uint8Array(analyser.frequencyBinCount);
+    const POINTS = 72;
+    const MAX_LAG = 10;
+    const LAYERS = [
+      { scale: 0.52, alpha: 0.22, lag: 10 },
+      { scale: 0.76, alpha: 0.38, lag: 5 },
+      { scale: 1.0, alpha: 0.85, lag: 0 },
+    ];
+    const CONTOURS = 8;
+
+    const timeData = new Uint8Array(analyser.fftSize);
+    const history = new Array<number>(POINTS + MAX_LAG).fill(0);
+    let level = 0;
+    let gain = 0.15;
+    let frame = 0;
+    let phase = 0;
+
+    // Catmull-Rom spline through the points -> smooth, organic curve rather
+    // than visibly straight segments between samples.
+    const curveThrough = (pts: [number, number][]) => {
+      canvasCtx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p0 = pts[i - 1] ?? pts[i];
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        const p3 = pts[i + 2] ?? pts[i + 1];
+        canvasCtx.bezierCurveTo(
+          p1[0] + (p2[0] - p0[0]) / 6,
+          p1[1] + (p2[1] - p0[1]) / 6,
+          p2[0] - (p3[0] - p1[0]) / 6,
+          p2[1] - (p3[1] - p1[1]) / 6,
+          p2[0],
+          p2[1]
+        );
+      }
+    };
 
     const draw = () => {
       if (!analyserRef.current) return; // stopped mid-frame
       rafRef.current = requestAnimationFrame(draw);
-      analyser.getByteTimeDomainData(data);
+      frame++;
+      phase += 0.045;
+
+      // RMS of the time-domain signal = perceived loudness this frame.
+      analyser.getByteTimeDomainData(timeData);
+      let sumSq = 0;
+      for (let i = 0; i < timeData.length; i++) {
+        const v = (timeData[i] - 128) / 128;
+        sumSq += v * v;
+      }
+      const raw = Math.sqrt(sumSq / timeData.length);
+      level += (raw - level) * 0.35;
+
+      // Auto-gain against a decaying running peak, so quiet and loud mics
+      // alike fill the height instead of drawing a permanently flat ribbon.
+      gain = Math.max(level, gain * 0.995, 0.06);
+      if (frame % 2 === 0) {
+        // ^1.6 adds contrast: loud syllables stay tall and quiet passages
+        // stay low, giving real peaks and valleys rather than a solid slab.
+        history.push(Math.pow(Math.min(1, level / gain), 1.6));
+        history.shift();
+      }
 
       const { width, height } = canvas;
       canvasCtx.clearRect(0, 0, width, height);
-      canvasCtx.lineWidth = 2;
-      canvasCtx.strokeStyle = "#c17a42"; // clay-500 (canvas can't read CSS vars)
-      canvasCtx.beginPath();
-      const sliceWidth = width / data.length;
-      let x = 0;
-      for (let i = 0; i < data.length; i++) {
-        const v = data[i] / 128.0;
-        const y = (v * height) / 2;
-        if (i === 0) canvasCtx.moveTo(x, y);
-        else canvasCtx.lineTo(x, y);
-        x += sliceWidth;
+
+      const centerY = height / 2;
+      const maxHalf = height / 2 - 5;
+      const step = width / (POINTS - 1);
+      let peak = 0;
+      for (let i = history.length - POINTS; i < history.length; i++) {
+        if (history[i] > peak) peak = history[i];
       }
-      canvasCtx.lineTo(width, height / 2);
-      canvasCtx.stroke();
+
+      // Canvas can't read CSS custom properties, hence the literal hexes.
+      const gradient = canvasCtx.createLinearGradient(0, 0, width, 0);
+      gradient.addColorStop(0, "#8bb373"); // sage-400
+      gradient.addColorStop(0.45, "#e5b48a"); // clay-300
+      gradient.addColorStop(1, "#c17a42"); // clay-500
+      // Glow warms from sage toward clay as volume rises, so louder speech
+      // visibly lights up rather than only growing taller.
+      const glow = mixSageClay(Math.min(1, peak * 1.6));
+
+      for (const layer of LAYERS) {
+        const top: [number, number][] = [];
+        const bot: [number, number][] = [];
+        for (let i = 0; i < POINTS; i++) {
+          const t = i / (POINTS - 1);
+          // Taper only near the two edges, so mid-width peaks keep full
+          // height and the wave still fades gracefully in and out.
+          const edge = Math.min(1, Math.min(t, 1 - t) / 0.12);
+          // Gentle idle ripple so the wave still undulates during silence;
+          // real signal wins the moment there is any input.
+          const breathe = 0.05 + Math.sin(phase + i * 0.3 + layer.lag) * 0.022;
+          const amp = Math.max(history[i + (MAX_LAG - layer.lag)], breathe) * edge * layer.scale;
+          const h = Math.max(1, amp * maxHalf);
+          const x = i * step;
+          top.push([x, centerY - h]);
+          bot.push([x, centerY + h]);
+        }
+
+        canvasCtx.save();
+        canvasCtx.strokeStyle = gradient;
+        canvasCtx.shadowColor = glow;
+
+        // Nested contours (the same wave at fractions of full height) give
+        // the layered, luminous wireframe look instead of one filled mass.
+        for (let k = 1; k <= CONTOURS; k++) {
+          const f = k / CONTOURS;
+          const outer = k === CONTOURS;
+          canvasCtx.globalAlpha = layer.alpha * (outer ? 1 : 0.16 + 0.5 * f);
+          canvasCtx.lineWidth = outer ? 1.4 : 0.9;
+          canvasCtx.shadowBlur = outer ? 7 + peak * 13 : 3;
+          for (const side of [top, bot]) {
+            canvasCtx.beginPath();
+            curveThrough(side.map(([x, y]) => [x, centerY + (y - centerY) * f]));
+            canvasCtx.stroke();
+          }
+        }
+
+        // Bright filament along the front layer's outermost crest/trough.
+        if (layer.scale === 1) {
+          canvasCtx.globalAlpha = 0.9;
+          canvasCtx.strokeStyle = "rgba(253, 251, 246, 0.9)"; // cream-50
+          canvasCtx.lineWidth = 1.2;
+          canvasCtx.shadowBlur = 9;
+          for (const side of [top, bot]) {
+            canvasCtx.beginPath();
+            curveThrough(side);
+            canvasCtx.stroke();
+          }
+        }
+        canvasCtx.restore();
+      }
     };
     draw();
   }
@@ -105,7 +237,9 @@ export default function AudioRecorder({
       chunksRef.current = [];
 
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
+      // 1024 samples (~21ms at 48kHz) is a long enough window for a stable
+      // RMS loudness reading; 256 makes the level jitter frame to frame.
+      analyser.fftSize = 1024;
       analyserRef.current = analyser;
 
       processor.onaudioprocess = (e) => {
@@ -118,7 +252,6 @@ export default function AudioRecorder({
       setRecording(true);
       setSeconds(0);
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
-      drawWaveform();
     } catch {
       setError("Microphone unavailable in this browser/session — use the file upload below.");
     }
@@ -236,11 +369,11 @@ export default function AudioRecorder({
         {recording && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 56 }}
+            animate={{ opacity: 1, height: 88 }}
             exit={{ opacity: 0, height: 0 }}
-            className="overflow-hidden rounded-xl bg-sage-50"
+            className="overflow-hidden rounded-xl bg-ink-900"
           >
-            <canvas ref={canvasRef} width={600} height={56} className="h-14 w-full" />
+            <canvas ref={canvasRef} width={600} height={88} className="h-22 w-full" />
           </motion.div>
         )}
       </AnimatePresence>
@@ -259,6 +392,18 @@ export default function AudioRecorder({
       {error && <p className="text-sm text-[var(--color-danger)]">{error}</p>}
     </Card>
   );
+}
+
+// Canvas can't read CSS custom properties, so sage-500/clay-500 are
+// hand-copied here as RGB triplets to interpolate between.
+const SAGE_500: [number, number, number] = [107, 153, 80];
+const CLAY_500: [number, number, number] = [193, 122, 66];
+
+function mixSageClay(t: number): string {
+  const r = Math.round(SAGE_500[0] + (CLAY_500[0] - SAGE_500[0]) * t);
+  const g = Math.round(SAGE_500[1] + (CLAY_500[1] - SAGE_500[1]) * t);
+  const b = Math.round(SAGE_500[2] + (CLAY_500[2] - SAGE_500[2]) * t);
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {
