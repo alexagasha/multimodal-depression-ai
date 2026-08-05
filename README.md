@@ -160,9 +160,3 @@ API's `CORS_EXTRA_ORIGINS` env var. See `frontend/.env.example`.
 - **Person B:** `src/pipelines/video_pipeline.py`, `src/fusion/`, `src/eval/`,
   `docker/`, deployment
 
-## Open decisions to pin down before Phase 1 closes
-
-- Is E-DAIC-WOZ the train+test source, or test-only with a separate primary
-  training set? (See `data/synthetic/generate_synthetic_data.py` — it
-  currently assumes a single source split into train/dev/test, matching
-  E-DAIC-WOZ's official split convention.)
