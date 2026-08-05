@@ -41,6 +41,13 @@ from src.safety.risk_flag import flag_risk
 from api.storage import store
 from api.genui import generate_narrative
 from api.subtype_differential import generate_differential
+from api.trends import relapse_warning, risk_trajectory
+from api.evidence import generate_evidence
+from api.treatment_suggestions import generate_suggestions
+from api.patient_summary import generate_patient_summary
+from api.note_draft import draft_note
+from api.caseload_query import answer_query
+from api.analytics_summary import generate_analytics_narrative
 
 LIVE_DATA_ROOT = os.path.join(os.path.dirname(__file__), "..", "data", "live", "sessions")
 WEIGHTS_PATH = os.path.join(os.path.dirname(__file__), "..", "outputs", "weights", "fusion_head.npz")
@@ -96,6 +103,15 @@ class ClinicalNoteIn(BaseModel):
     note_text: str
 
 
+class TreatmentEventIn(BaseModel):
+    event_type: str  # "medication_change" | "therapy_session" | "other"
+    description: str
+
+
+class QueryIn(BaseModel):
+    question: str
+
+
 class ReviewIn(BaseModel):
     reviewer: str
     agrees: bool
@@ -146,20 +162,22 @@ def _triage_sort_key(session: dict):
 
 def _enrich_participant(participant: dict) -> dict:
     """Join a patient record with their visit history: visit count, most
-    recent visit date, and that visit's risk_flag/scores — powers the
-    patient roster so a clinician sees who needs attention without opening
-    each patient individually."""
+    recent visit date, that visit's risk_flag/scores, and rule-based (not
+    LLM) trend flags — powers the patient roster so a clinician sees who
+    needs attention without opening each patient individually."""
     visits = [s for s in store.list("sessions") if s["participant_id"] == participant["participant_id"]]
     visits.sort(key=lambda s: s.get("created_at") or "")
-    latest = visits[-1] if visits else None
-    latest_enriched = _enrich_session(latest) if latest else None
+    enriched_visits = [_enrich_session(v) for v in visits]
+    latest = enriched_visits[-1] if enriched_visits else None
     return {
         **participant,
         "visit_count": len(visits),
         "last_visit_at": latest["created_at"] if latest else None,
-        "risk_flag": latest_enriched["risk_flag"] if latest_enriched else None,
-        "phq9_pred": latest_enriched["phq9_pred"] if latest_enriched else None,
-        "hamd_pred": latest_enriched["hamd_pred"] if latest_enriched else None,
+        "risk_flag": latest["risk_flag"] if latest else None,
+        "phq9_pred": latest["phq9_pred"] if latest else None,
+        "hamd_pred": latest["hamd_pred"] if latest else None,
+        "relapse_warning": relapse_warning(enriched_visits),
+        "risk_trajectory": risk_trajectory(enriched_visits),
     }
 
 
@@ -292,6 +310,12 @@ def score_session(session_id: str):
     )
     transcript_text = " ".join(seg["text"] for seg in segments if seg.get("text"))
     subtype_differential = generate_differential(transcript_text)
+    evidence = generate_evidence(transcript_text, xai["modality_attributions"])
+    treatment_suggestions = generate_suggestions(
+        scores["phq9"], scores["hamd"], scale["phq9_total"], scale["hamd_total"],
+        binary_pred, risk_flag, subtype_differential,
+    )
+    patient_summary = generate_patient_summary(scores["hamd"], risk_flag)
 
     result = {
         "session_id": session_id,
@@ -302,10 +326,13 @@ def score_session(session_id: str):
         # a substitute for the clinician's own PHQ-9/HAM-D scoring.
         "phq9_clinician": scale["phq9_total"],
         "hamd_clinician": scale["hamd_total"],
-        # None when unavailable (no ANTHROPIC_API_KEY) — see
-        # api/subtype_differential.py's docstring for why there's no
-        # non-LLM fallback here, unlike the narrative above.
+        # All four below are None when unavailable (no ANTHROPIC_API_KEY) —
+        # see each module's docstring for why there's no non-LLM fallback,
+        # unlike the scores-only narrative above.
         "subtype_differential": subtype_differential,
+        "evidence": evidence,
+        "treatment_suggestions": treatment_suggestions,
+        "patient_summary": patient_summary,
         "binary_pred": binary_pred,
         "risk_flag": risk_flag,
         "modality_attributions": xai["modality_attributions"],
@@ -314,6 +341,37 @@ def score_session(session_id: str):
     store.set("predictions", session_id, result)
     store.update("sessions", session_id, {"status": "scored"})
     return result
+
+
+@app.post("/sessions/{session_id}/note-draft")
+def get_note_draft(session_id: str):
+    """
+    On-demand AI-drafted SOAP note (api/note_draft.py) — computed fresh each
+    call, not stored, since a clinician may want to regenerate it after
+    adding their own notes first. The clinician edits the draft client-side
+    and submits it as a real note via the existing POST .../notes endpoint;
+    this endpoint never writes to clinical_notes itself.
+    """
+    _require_session(session_id)
+    prediction = store.get("predictions", session_id)
+    if prediction is None:
+        raise HTTPException(400, "session not scored yet — POST /sessions/{id}/score first")
+
+    segments = build_segments(session_id, data_root=LIVE_DATA_ROOT)
+    transcript_text = " ".join(seg["text"] for seg in segments if seg.get("text"))
+    draft = draft_note(
+        transcript_text,
+        prediction["phq9_pred"], prediction["hamd_pred"],
+        prediction["phq9_clinician"], prediction["hamd_clinician"],
+        prediction["risk_flag"], prediction.get("subtype_differential"),
+    )
+    if draft is None:
+        raise HTTPException(
+            503,
+            "Note drafting requires an LLM connection (ANTHROPIC_API_KEY) — "
+            "not available in this local demo without a key.",
+        )
+    return draft
 
 
 @app.get("/sessions/{session_id}/results")
@@ -353,6 +411,99 @@ def list_participant_sessions(participant_id: str):
     ]
     sessions.sort(key=lambda s: s.get("created_at") or "")
     return sessions
+
+
+@app.post("/participants/{participant_id}/treatments")
+def add_treatment_event(participant_id: str, body: TreatmentEventIn):
+    """
+    Treatment-response overlay data: medication/therapy changes recorded
+    against a patient (not a single visit), so they can be plotted on the
+    severity trend — "did the SSRI switch actually work" becomes a glance,
+    not a chart review. Append-only, same convention as clinical notes.
+    """
+    if store.get("participants", participant_id) is None:
+        raise HTTPException(404, f"participant {participant_id} not found")
+    events = store.get("treatment_events", participant_id) or []
+    event = {
+        "event_id": uuid.uuid4().hex[:10],
+        "event_type": body.event_type,
+        "description": body.description,
+        "event_date": _now_iso(),
+    }
+    events.append(event)
+    store.set("treatment_events", participant_id, events)
+    return event
+
+
+@app.get("/participants/{participant_id}/treatments")
+def list_treatment_events(participant_id: str):
+    if store.get("participants", participant_id) is None:
+        raise HTTPException(404, f"participant {participant_id} not found")
+    events = store.get("treatment_events", participant_id) or []
+    return sorted(events, key=lambda e: e.get("event_date") or "")
+
+
+@app.post("/query")
+def query_caseload(body: QueryIn):
+    """
+    Natural-language caseload query (api/caseload_query.py) over the full
+    patient roster — "which patients haven't improved in 3 visits."
+    """
+    roster = [_enrich_participant(p) for p in store.list("participants")]
+    result = answer_query(body.question, roster)
+    if result is None:
+        raise HTTPException(
+            503,
+            "Caseload queries require an LLM connection (ANTHROPIC_API_KEY) — "
+            "not available in this local demo without a key.",
+        )
+    return result
+
+
+@app.get("/analytics")
+def get_analytics():
+    """
+    Practice-level analytics: a population view for a clinician managing a
+    caseload, not just one patient's chart at a time. Numbers are always
+    computed deterministically here; only the narrative on top
+    (api/analytics_summary.py) depends on an LLM connection.
+    """
+    participants = store.list("participants")
+    all_sessions = store.list("sessions")
+    scored = []
+    for s in all_sessions:
+        prediction = store.get("predictions", s["session_id"])
+        if prediction:
+            scored.append(prediction)
+
+    # PHQ-9 severity bands (standard clinical convention: 0-4 minimal,
+    # 5-9 mild, 10-14 moderate, 15-19 moderately severe, 20-27 severe).
+    bands = {"minimal (0-4)": 0, "mild (5-9)": 0, "moderate (10-14)": 0,
+             "moderately severe (15-19)": 0, "severe (20-27)": 0}
+    for p in scored:
+        v = p["phq9_pred"]
+        if v < 5:
+            bands["minimal (0-4)"] += 1
+        elif v < 10:
+            bands["mild (5-9)"] += 1
+        elif v < 15:
+            bands["moderate (10-14)"] += 1
+        elif v < 20:
+            bands["moderately severe (15-19)"] += 1
+        else:
+            bands["severe (20-27)"] += 1
+
+    n_scored = len(scored)
+    stats = {
+        "total_patients": len(participants),
+        "total_visits": len(all_sessions),
+        "scored_visits": n_scored,
+        "referral_flag_rate": round(sum(1 for p in scored if p["risk_flag"]) / n_scored, 3) if n_scored else None,
+        "caseness_rate": round(sum(1 for p in scored if p["binary_pred"]) / n_scored, 3) if n_scored else None,
+        "phq9_severity_distribution": bands,
+    }
+    stats["narrative"] = generate_analytics_narrative(stats)
+    return stats
 
 
 @app.post("/sessions/{session_id}/notes")

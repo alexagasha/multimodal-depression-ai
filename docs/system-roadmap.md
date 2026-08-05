@@ -131,6 +131,74 @@ Still open: Firebase Auth login, Firebase Hosting deploy, full WCAG 2.1 AA
 audit (axe-core in CI) — the UI follows accessible patterns (semantic
 labels, ARIA on the risk alert, read-aloud) but hasn't been formally audited.
 
+## Phase 3b — GenAI dashboard features — **done (10/10)**
+
+The full 10-feature spec a depression-specialist psychiatrist would want
+from a GenAI-powered dashboard (source: `generative ai.txt`, originally
+proposed then approved as the build spec). Feature 3 (subtype differential)
+shipped in Phase 3 above; the other nine shipped in one pass. Shared
+infrastructure: `api/llm_utils.py` centralizes the Claude-call-with-
+honest-fallback convention (`call_claude()` returns `None` on any failure —
+no API key, bad JSON, network error) so every module below returns `None`/
+"unavailable" rather than fabricating output. Two of the nine are
+deliberately **rule-based, not LLM** — safety-adjacent trend signals
+shouldn't depend on model availability or be prone to hallucination, same
+philosophy as `src/safety/risk_flag.py`.
+
+1. **AI-drafted clinical note** (`api/note_draft.py`,
+   `components/NoteDraftPanel.tsx`) — on-demand SOAP-format draft from the
+   transcript + scores via `POST /sessions/{id}/note-draft`; the clinician
+   edits inline and saves through the existing notes endpoint. The draft is
+   never auto-submitted or stored on its own.
+2. **Explainable score — evidence quotes** (`api/evidence.py`,
+   `components/EvidenceQuotes.tsx`) — up to 3 exact transcript phrases
+   behind the dominant modality's attribution, appended to the `/score`
+   result as `evidence`. Not a literal saliency map (mock/frozen encoders
+   don't support meaningful gradient attribution yet) — an honest LLM read
+   grounded only in what was actually said.
+4. **Relapse early-warning** (`api/trends.py::relapse_warning`) — **rule-
+   based**: flags a monotonically non-improving HAM-D trend across the last
+   3 scored visits with a ≥3-point delta, surfaced as `relapse_warning` on
+   `GET /participants` and an amber banner on the patient detail page.
+5. **Treatment-response overlay** (`treatment_events` collection,
+   `POST/GET /participants/{id}/treatments`, `components/TreatmentEvents.tsx`,
+   `TrendSparkline.tsx`) — medication/therapy-change events, snapped to the
+   nearest visit by date and plotted as dashed markers on the severity
+   trend (visit-index-based chart, not a true continuous time axis).
+6. **Risk trajectory** (`api/trends.py::risk_trajectory`) — **rule-based**:
+   flags 2+ referral-flagged visits in the last 3, distinct from a single
+   flagged visit (already handled by `RiskBanner`) — a repeating pattern,
+   surfaced the same way as relapse_warning.
+7. **Guideline-grounded next-step suggestions** (`api/treatment_suggestions.py`)
+   — 2-3 advisory considerations ("consider"/"may warrant," never a
+   directive) from paraphrased, non-proprietary STAR\*D-style stepped-care
+   heuristics + DSM-5 subtype-treatment matching, inlined in the prompt —
+   same lightweight approach as the subtype differential, not full Phase 5
+   retrieval.
+8. **Natural-language caseload query** (`api/caseload_query.py`,
+   `POST /query`) — the roster JSON passed as context, no function-calling
+   infrastructure needed at local-demo scale; matching patients get
+   highlighted on the roster page. Returns 503 (not a silent empty result)
+   when unavailable, since it's a deliberate user action.
+9. **Practice-level analytics** (`GET /analytics`, `app/analytics/page.tsx`)
+   — patient/visit counts, referral-flag rate, caseness rate, and a PHQ-9
+   severity-band distribution, all computed deterministically; an optional
+   GenAI narrative (`api/analytics_summary.py`) summarizes the numbers in
+   plain language on top, grounded strictly in what's passed to it.
+10. **Patient-facing after-visit summary** (`api/patient_summary.py`,
+    `components/PatientSummaryCard.tsx`) — plain-language, ~4th-grade
+    reading level, no clinical jargon or scale names, gentle (not alarming)
+    handling when a referral flag is active. Pairs with the same
+    `speechSynthesis` read-aloud pattern already in `ScaleForm.tsx`.
+
+Verified via `pytest` (46 passed / 1 skipped — includes the two rule-based
+trend functions tested directly with synthetic visit sequences, and every
+LLM module's unavailable-without-key path), `npm run build`/`lint` (clean),
+and a live browser walkthrough exercising all nine: roster query box,
+patient trend + treatment overlay, note-draft panel, and every score-modal
+section, confirming honest "unavailable" rendering with zero console errors
+in the absence of `ANTHROPIC_API_KEY`.
+
 ## Phase 4 — Firebase production deploy
 
 Not started. When picked up:
@@ -143,12 +211,17 @@ Not started. When picked up:
 - Firebase Storage for audio/transcripts; Firebase Auth for clinician/RA
   accounts; trained `outputs/weights/fusion_head.npz` uploaded there and
   pulled by Cloud Run at startup.
-- CI: `pytest` (already green, 36 passed / 1 skipped) + `npm run build` /
+- CI: `pytest` (already green, 46 passed / 1 skipped) + `npm run build` /
   `npm run lint` (already green) + new web tests, deploying on merge.
 
 ## Phase 5 — RAG-grounded GenUI (DSM-5 retrieval)
 
-Not started; scoped:
+Not started; scoped. Note: Phase 3b's `api/subtype_differential.py` and
+`api/treatment_suggestions.py` already use this phase's *approach*
+(paraphrased criteria inlined directly in the prompt) at a scope that
+doesn't need real retrieval yet — this phase is what to reach for once the
+corpus grows past what fits inline (full DSM-5, real clinical guidelines,
+per-patient literature).
 - Corpus: short **paraphrased** DSM-5 MDD criteria + PHQ-9/HAM-D item
   definitions (DSM-5 text itself is APA copyrighted — don't embed it
   verbatim).

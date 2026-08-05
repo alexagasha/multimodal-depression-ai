@@ -72,6 +72,11 @@ export interface SubtypeDifferentialResult {
   psychotic_features: SubtypeEntry;
 }
 
+export interface EvidenceResult {
+  modality: string;
+  quotes: string[];
+}
+
 export interface ScoreResult {
   session_id: string;
   phq9_pred: number;
@@ -84,9 +89,50 @@ export interface ScoreResult {
   risk_flag: boolean;
   modality_attributions: Record<string, number>;
   narrative: string;
-  /** null when unavailable (no ANTHROPIC_API_KEY) — there is deliberately no
-   * non-LLM fallback for this one, see api/subtype_differential.py. */
+  /** All four below are null when unavailable (no ANTHROPIC_API_KEY) —
+   * deliberately no non-LLM fallback for any of these, see each module's
+   * docstring under api/. */
   subtype_differential: SubtypeDifferentialResult | null;
+  evidence: EvidenceResult | null;
+  treatment_suggestions: string[] | null;
+  patient_summary: string | null;
+}
+
+export interface NoteDraft {
+  subjective: string;
+  objective: string;
+  assessment: string;
+  plan: string;
+}
+
+export interface TreatmentEventIn {
+  event_type: "medication_change" | "therapy_session" | "other";
+  description: string;
+}
+
+export interface TreatmentEvent extends TreatmentEventIn {
+  event_id: string;
+  event_date: string;
+}
+
+export interface TrendFlag {
+  flag: boolean;
+  reason: string;
+}
+
+export interface CaseloadQueryResult {
+  answer: string;
+  matching_patient_ids: string[];
+}
+
+export interface AnalyticsResult {
+  total_patients: number;
+  total_visits: number;
+  scored_visits: number;
+  referral_flag_rate: number | null;
+  caseness_rate: number | null;
+  phq9_severity_distribution: Record<string, number>;
+  narrative: string | null;
 }
 
 export interface VisitSummary {
@@ -110,6 +156,9 @@ export interface PatientSummary extends PatientIn {
   risk_flag: boolean | null;
   phq9_pred: number | null;
   hamd_pred: number | null;
+  /** Rule-based (not LLM) trend flags — see api/trends.py. */
+  relapse_warning: TrendFlag;
+  risk_trajectory: TrendFlag;
 }
 
 export interface ClinicalNote {
@@ -202,4 +251,24 @@ export const api = {
       throw e;
     }
   },
+
+  getNoteDraft: (visitId: string) =>
+    request<NoteDraft>(`/sessions/${visitId}/note-draft`, { method: "POST" }),
+
+  addTreatmentEvent: (patientId: string, body: TreatmentEventIn) =>
+    request<TreatmentEvent>(`/participants/${patientId}/treatments`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  listTreatmentEvents: (patientId: string) =>
+    request<TreatmentEvent[]>(`/participants/${patientId}/treatments`),
+
+  queryCaseload: (question: string) =>
+    request<CaseloadQueryResult>("/query", {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    }),
+
+  getAnalytics: () => request<AnalyticsResult>("/analytics"),
 };

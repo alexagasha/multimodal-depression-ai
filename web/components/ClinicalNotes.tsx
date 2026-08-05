@@ -4,7 +4,16 @@ import { useEffect, useState } from "react";
 import { api, ApiError, ClinicalNote } from "@/lib/api";
 import { Field, TextInput, TextArea, Card } from "@/components/FormField";
 
-export default function ClinicalNotes({ visitId }: { visitId: string }) {
+export default function ClinicalNotes({
+  visitId,
+  refreshKey,
+}: {
+  visitId: string;
+  /** Bump this (e.g. a counter) to force a re-fetch after a note was added
+   * elsewhere — NoteDraftPanel saves via the same POST .../notes endpoint
+   * but this component owns its own list state. */
+  refreshKey?: number;
+}) {
   const [notes, setNotes] = useState<ClinicalNote[]>([]);
   const [author, setAuthor] = useState("");
   const [text, setText] = useState("");
@@ -15,7 +24,7 @@ export default function ClinicalNotes({ visitId }: { visitId: string }) {
     api.listNotes(visitId).then(setNotes).catch(() => {});
   }
 
-  useEffect(refresh, [visitId]);
+  useEffect(refresh, [visitId, refreshKey]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();

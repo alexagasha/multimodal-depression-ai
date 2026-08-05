@@ -9,6 +9,7 @@ import RiskBanner from "@/components/RiskBanner";
 import ScaleForm from "@/components/ScaleForm";
 import AudioRecorder from "@/components/AudioRecorder";
 import ClinicalNotes from "@/components/ClinicalNotes";
+import NoteDraftPanel from "@/components/NoteDraftPanel";
 import ScoreModal from "@/components/ScoreModal";
 import { Card } from "@/components/FormField";
 
@@ -20,6 +21,7 @@ export default function VisitWorkspacePage() {
   const [scoreError, setScoreError] = useState<string | null>(null);
   const [result, setResult] = useState<ScoreResult | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [notesRefreshKey, setNotesRefreshKey] = useState(0);
 
   function refreshVisit() {
     api
@@ -111,7 +113,9 @@ export default function VisitWorkspacePage() {
         )}
       </Card>
 
-      <ClinicalNotes visitId={id} />
+      <NoteDraftPanel visitId={id} onSaved={() => setNotesRefreshKey((k) => k + 1)} />
+
+      <ClinicalNotes visitId={id} refreshKey={notesRefreshKey} />
 
       {modalOpen && result && (
         <ScoreModal result={result} visitId={id} onClose={() => setModalOpen(false)} />

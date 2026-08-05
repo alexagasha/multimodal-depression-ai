@@ -7,6 +7,7 @@ import Leaf from "./illustrations/Leaf";
 const LINKS = [
   { href: "/", label: "Patients" },
   { href: "/patients/new", label: "Register patient" },
+  { href: "/analytics", label: "Analytics" },
 ];
 
 export default function NavShell() {

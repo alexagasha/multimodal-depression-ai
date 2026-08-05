@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, PatientSummary, VisitSummary } from "@/lib/api";
+import { api, ApiError, PatientSummary, VisitSummary, TreatmentEvent } from "@/lib/api";
 import { Card } from "@/components/FormField";
 import TrendSparkline from "@/components/TrendSparkline";
+import TreatmentEvents from "@/components/TreatmentEvents";
 
 const DEMOGRAPHIC_FIELDS: { key: keyof PatientSummary; label: string }[] = [
   { key: "age_band", label: "Age band" },
@@ -32,6 +33,7 @@ export default function PatientDetailPage() {
   const router = useRouter();
   const [patient, setPatient] = useState<PatientSummary | null>(null);
   const [visits, setVisits] = useState<VisitSummary[] | null>(null);
+  const [treatmentEvents, setTreatmentEvents] = useState<TreatmentEvent[]>([]);
   const [notFound, setNotFound] = useState(false);
   const [startingVisit, setStartingVisit] = useState(false);
 
@@ -88,6 +90,23 @@ export default function PatientDetailPage() {
         </div>
       )}
 
+      {(patient.relapse_warning.flag || patient.risk_trajectory.flag) && (
+        <div className="space-y-2">
+          {patient.relapse_warning.flag && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <span className="font-semibold">Worsening trend detected —</span>{" "}
+              {patient.relapse_warning.reason}
+            </div>
+          )}
+          {patient.risk_trajectory.flag && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <span className="font-semibold">Rising risk pattern —</span>{" "}
+              {patient.risk_trajectory.reason}
+            </div>
+          )}
+        </div>
+      )}
+
       <Card>
         <h2 className="font-display text-base font-semibold text-sage-800">Demographics</h2>
         <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
@@ -105,9 +124,11 @@ export default function PatientDetailPage() {
           Severity over time
         </h2>
         <div className="mt-3">
-          <TrendSparkline visits={visits} />
+          <TrendSparkline visits={visits} events={treatmentEvents} />
         </div>
       </Card>
+
+      <TreatmentEvents patientId={id} onChange={setTreatmentEvents} />
 
       <ul className="space-y-2">
         {visits.map((v) => (

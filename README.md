@@ -56,8 +56,20 @@ score modal, which shows the **AI estimate next to the clinician's own
 administered score** — the AI runs as a second opinion, not a replacement
 (gauges, XAI attribution bars, a GenUI narrative, a clinician review/adjust
 action, print-to-PDF) → append-only clinical notes → a longitudinal severity
-trend across the patient's visit history. See the phased roadmap for what's
-next (DSM-5-grounded RAG and the Firebase production deploy).
+trend across the patient's visit history.
+
+**The full 10-feature GenAI dashboard spec is implemented** (see
+`generative ai.txt` for the spec, `docs/system-roadmap.md` Phase 3b for
+what shipped): AI-drafted SOAP notes, transcript evidence quotes behind
+each score, the symptom-subtype differential, rule-based relapse/risk-
+trajectory early-warning, a treatment-response overlay on the severity
+trend, guideline-grounded next-step suggestions, a natural-language
+caseload query box, practice-level analytics, and a patient-facing
+after-visit summary. Every LLM-backed feature honestly reports
+"unavailable" rather than fabricating output when `ANTHROPIC_API_KEY`
+isn't set — there is deliberately no non-LLM fallback for any of them. See
+the phased roadmap for what's next (DSM-5 retrieval infrastructure at
+scale and the Firebase production deploy).
 
 ## Directory structure
 
@@ -90,10 +102,17 @@ depression-detection/
 ├── api/                                 # FastAPI backend (Phase 1 of the roadmap)
 │   ├── main.py                          # HTTP endpoints, wraps the pipeline unchanged
 │   ├── storage.py                       # local JSON store (Firestore-shaped; swaps in Phase 4)
-│   └── genui.py                         # score-modal narrative (Claude, template fallback)
+│   ├── llm_utils.py                     # shared Claude-call-with-honest-fallback helper
+│   ├── trends.py                        # rule-based (not LLM) relapse/risk-trajectory flags
+│   ├── genui.py, subtype_differential.py, evidence.py, treatment_suggestions.py,
+│   │   patient_summary.py, note_draft.py, caseload_query.py, analytics_summary.py
+│   │                                    # the 10-feature GenAI dashboard spec — see
+│   │                                    # docs/system-roadmap.md Phase 3b
 ├── web/                                 # Next.js + TypeScript + Tailwind app (organic theme)
-│   ├── app/                             # patient roster (/), patients/new, patients/[id], visits/[id]
-│   ├── components/                      # ScaleForm, AudioRecorder, ScoreModal, ClinicalNotes, …
+│   ├── app/                             # patient roster (/), patients/new, patients/[id],
+│   │                                    # visits/[id], analytics
+│   ├── components/                      # ScaleForm, AudioRecorder, ScoreModal, ClinicalNotes,
+│   │                                    # NoteDraftPanel, TreatmentEvents, SubtypeDifferential, …
 │   └── lib/                             # typed API client (patient/visit naming) + draft-autosave hook
 ├── tests/
 │   ├── test_end_to_end.py               # pipeline smoke tests on synthetic data

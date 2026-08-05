@@ -5,6 +5,8 @@ import { api, ApiError, Review, ScoreResult } from "@/lib/api";
 import Gauge from "@/components/Gauge";
 import RiskBanner from "@/components/RiskBanner";
 import SubtypeDifferential from "@/components/SubtypeDifferential";
+import EvidenceQuotes from "@/components/EvidenceQuotes";
+import PatientSummaryCard from "@/components/PatientSummaryCard";
 import { Field, TextInput, TextArea } from "@/components/FormField";
 
 const MODALITY_LABEL: Record<string, string> = {
@@ -159,6 +161,9 @@ export default function ScoreModal({
                 </div>
               ))}
             </div>
+            <div className="mt-2">
+              <EvidenceQuotes data={result.evidence} />
+            </div>
           </div>
 
           <div className="rounded-2xl bg-sage-50 p-4">
@@ -169,6 +174,25 @@ export default function ScoreModal({
           </div>
 
           <SubtypeDifferential data={result.subtype_differential} />
+
+          <div className="rounded-2xl bg-sage-50 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-sage-500">
+              Next-step considerations — AI-suggested, always advisory
+            </p>
+            {!result.treatment_suggestions || result.treatment_suggestions.length === 0 ? (
+              <p className="mt-1 text-sm text-sage-600">
+                Not available — requires an LLM connection (ANTHROPIC_API_KEY).
+              </p>
+            ) : (
+              <ul className="mt-1 list-disc space-y-1 pl-4 text-sm text-ink-900">
+                {result.treatment_suggestions.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <PatientSummaryCard summary={result.patient_summary} />
 
           <ReviewSection visitId={visitId} />
         </div>
