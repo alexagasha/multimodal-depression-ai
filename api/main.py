@@ -19,9 +19,11 @@ import json
 import os
 import sys
 import uuid
+import wave
 from datetime import datetime, timezone
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,7 +35,7 @@ from src.pipelines.sync import build_segments
 from src.pipelines.text_pipeline import BertTextEncoder, run_text_pipeline
 from src.pipelines.audio_pipeline import Wav2Vec2AudioEncoder, run_audio_pipeline, _load_wav
 from src.pipelines.metadata_pipeline import run_metadata_pipeline
-from src.pipelines.asr_pipeline import WhisperASR, run_asr_pipeline
+from src.pipelines.asr_pipeline import WhisperASR, run_asr_pipeline, is_probably_silence
 from src.fusion.aggregate import build_participant_vector
 from src.fusion.model import FusionHead, HAMD_CASENESS_THRESHOLD
 from src.xai.attribution import explain_participant
@@ -46,6 +48,7 @@ from api.evidence import generate_evidence
 from api.treatment_suggestions import generate_suggestions
 from api.patient_summary import generate_patient_summary
 from api.note_draft import draft_note
+from api.live_note import draft_live_note
 from api.caseload_query import answer_query
 from api.analytics_summary import generate_analytics_narrative
 
@@ -271,12 +274,154 @@ async def upload_audio(session_id: str, file: UploadFile):
         json.dump({"sample_rate": sr, "duration_sec": duration_sec}, f)
 
     transcript_rows = run_asr_pipeline(waveform, sr, _asr)
-    pd.DataFrame(transcript_rows).to_csv(
-        os.path.join(session_dir, f"{session_id}_TRANSCRIPT.csv"), index=False
+    _write_transcript_csv(
+        os.path.join(session_dir, f"{session_id}_TRANSCRIPT.csv"), transcript_rows
     )
 
     store.update("sessions", session_id, {"status": "audio_uploaded"})
     return {"duration_sec": duration_sec, "n_transcript_rows": len(transcript_rows)}
+
+
+# --- Live streaming transcription -------------------------------------------
+# The web app posts ~6s WAV chunks while recording rather than one file at the
+# end, so the transcript and the AI note build up *during* the interview. Each
+# chunk is transcribed on its own and its timestamps are offset by the audio
+# already banked, so the accumulated rows stay in the same shape the batch path
+# produces. Chunk-boundary words can be clipped — the tradeoff for not
+# re-transcribing the whole session on stop, which this hardware can't do
+# quickly. The whole-file /audio endpoint above stays as the no-mic fallback.
+
+# Only redraft the running note once this much new transcript has arrived —
+# regenerating on every chunk would burn tokens and hit rate limits for a
+# note that has barely changed.
+LIVE_NOTE_MIN_NEW_CHARS = 350
+
+
+# The columns sync.load_transcript() expects. Written explicitly so a session
+# with no recognised speech still produces a readable (header-only) CSV —
+# real ASR returns zero segments for silence or non-speech audio, and
+# pd.DataFrame([]).to_csv() would otherwise emit an unparseable empty file.
+TRANSCRIPT_COLUMNS = ["start_time", "stop_time", "speaker", "value"]
+
+
+def _write_transcript_csv(path: str, rows: list) -> None:
+    pd.DataFrame(rows, columns=TRANSCRIPT_COLUMNS).to_csv(path, index=False)
+
+
+def _live_doc(session_id: str) -> dict:
+    return store.get("live_transcripts", session_id) or {
+        "session_id": session_id,
+        "rows": [],
+        "duration_sec": 0.0,
+        "sample_rate": None,
+        "note": None,
+        "note_at_chars": 0,
+    }
+
+
+def _transcript_text(rows: list) -> str:
+    return " ".join(r["value"] for r in rows if r.get("value"))
+
+
+@app.post("/sessions/{session_id}/audio/chunk")
+async def upload_audio_chunk(session_id: str, file: UploadFile):
+    _require_session(session_id)
+    session_dir = _session_dir(session_id)
+    os.makedirs(session_dir, exist_ok=True)
+
+    raw = await file.read()
+    tmp_path = os.path.join(session_dir, f"{session_id}_CHUNK.wav")
+    with open(tmp_path, "wb") as f:
+        f.write(raw)
+    waveform, sr = _load_wav(tmp_path)
+    os.remove(tmp_path)
+
+    live = _live_doc(session_id)
+    offset = float(live["duration_sec"])
+
+    # Append raw samples so finalize() can assemble the full-session WAV that
+    # the audio pipeline needs, without holding the whole take in memory.
+    with open(os.path.join(session_dir, f"{session_id}_AUDIO.pcm"), "ab") as f:
+        f.write(np.clip(waveform, -1.0, 1.0).astype("<f4").tobytes())
+
+    # Transcribing silence costs as much CPU as transcribing speech (and
+    # invites hallucinated text), so skip quiet chunks outright — this is what
+    # keeps live transcription comfortably ahead of realtime on CPU.
+    rows = [] if is_probably_silence(waveform) else run_asr_pipeline(waveform, sr, _asr)
+    for row in rows:
+        row["start_time"] = float(row["start_time"]) + offset
+        row["stop_time"] = float(row["stop_time"]) + offset
+
+    live["rows"].extend(rows)
+    live["duration_sec"] = offset + len(waveform) / float(sr)
+    live["sample_rate"] = sr
+
+    text = _transcript_text(live["rows"])
+    note_updated = False
+    if len(text) - live["note_at_chars"] >= LIVE_NOTE_MIN_NEW_CHARS:
+        note = draft_live_note(text)
+        # Keep the previous draft on failure rather than blanking the panel.
+        if note is not None:
+            live["note"] = note
+            note_updated = True
+        live["note_at_chars"] = len(text)
+
+    store.set("live_transcripts", session_id, live)
+    store.update("sessions", session_id, {"status": "recording"})
+    return {
+        "new_rows": rows,
+        "duration_sec": live["duration_sec"],
+        "n_rows_total": len(live["rows"]),
+        "note": live["note"],
+        "note_updated": note_updated,
+    }
+
+
+@app.post("/sessions/{session_id}/audio/finalize")
+def finalize_audio(session_id: str):
+    _require_session(session_id)
+    session_dir = _session_dir(session_id)
+    live = _live_doc(session_id)
+    pcm_path = os.path.join(session_dir, f"{session_id}_AUDIO.pcm")
+    # Only the audio is required — a session where nothing intelligible was
+    # said still finalizes (scoring then reports no transcript segments,
+    # which is a clearer failure than refusing to close the recording).
+    if not os.path.exists(pcm_path):
+        raise HTTPException(400, "no streamed audio for this session")
+
+    waveform = np.fromfile(pcm_path, dtype="<f4")
+    sr = int(live["sample_rate"] or 16000)
+    duration_sec = len(waveform) / float(sr)
+
+    # Assemble the same artefacts the whole-file path writes, so scoring and
+    # the audio pipeline are identical regardless of how the audio arrived.
+    with wave.open(os.path.join(session_dir, f"{session_id}_AUDIO.wav"), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes((np.clip(waveform, -1.0, 1.0) * 32767).astype("<i2").tobytes())
+    os.remove(pcm_path)
+
+    with open(os.path.join(session_dir, f"{session_id}_AUDIO.meta.json"), "w") as f:
+        json.dump({"sample_rate": sr, "duration_sec": duration_sec}, f)
+    _write_transcript_csv(
+        os.path.join(session_dir, f"{session_id}_TRANSCRIPT.csv"), live["rows"]
+    )
+
+    store.update("sessions", session_id, {"status": "audio_uploaded"})
+    return {"duration_sec": duration_sec, "n_transcript_rows": len(live["rows"])}
+
+
+@app.get("/sessions/{session_id}/live")
+def get_live_state(session_id: str):
+    """Transcript + running note so far — lets a reloaded page catch up."""
+    _require_session(session_id)
+    live = _live_doc(session_id)
+    return {
+        "rows": live["rows"],
+        "duration_sec": live["duration_sec"],
+        "note": live["note"],
+    }
 
 
 @app.post("/sessions/{session_id}/score")

@@ -46,7 +46,14 @@ deploy) is being built out beyond the score model itself.** A local FastAPI
 backend (`api/`) and a real Next.js + Tailwind web app (`web/`, organic
 sage/clay theme, hand-authored SVG assets) frame the tool the way a
 clinician would actually use it in practice — not a research data-collection
-form. The core loop is a **patient roster**, not a one-off intake pipeline:
+form. During a visit, recording, transcription and AI note-drafting run
+**concurrently** rather than as sequential steps: audio streams to the backend
+in ~6s chunks while recording, so the transcript and the SOAP note assemble
+themselves live, and pressing Stop finalizes and scores automatically. ASR is
+faster-whisper (`base.en`, int8, CPU) — chosen over openai-whisper because it
+needs no torch and is several times quicker on CPU, which is what makes
+real-time transcription feasible without a GPU. Set `DEP_ASR_MODEL=tiny.en`
+on slower hardware. The core loop is a **patient roster**, not a one-off intake pipeline:
 register a patient once, then start a new visit any time they come back;
 referral-flagged patients float to the top of the roster. Each visit: live
 mic recording (real `getUserMedia`/`AudioContext` WAV capture, with a

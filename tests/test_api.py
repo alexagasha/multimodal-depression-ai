@@ -22,6 +22,13 @@ from api.storage import Store
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(api_main.store, "root", str(tmp_path / "store"))
     monkeypatch.setattr(api_main, "LIVE_DATA_ROOT", str(tmp_path / "sessions"))
+    # Force the deterministic mock transcriber even when faster-whisper is
+    # installed. These tests cover the HTTP surface and pipeline plumbing, not
+    # ASR accuracy — and real Whisper returns zero segments for the synthetic
+    # noise used here (and takes minutes to do it), which would make the suite
+    # both slow and dependent on whether ASR deps happen to be present.
+    monkeypatch.setattr(api_main._asr, "model", None)
+    monkeypatch.setattr(api_main._asr, "backend", "mock")
     return TestClient(api_main.app)
 
 
@@ -461,3 +468,53 @@ def test_evidence_treatment_suggestions_patient_summary_unavailable(monkeypatch)
     assert generate_evidence("", {"text": 1.0}) is None  # empty transcript, no call needed
     assert generate_suggestions(5.0, 8.0, 6, 10, 0, False) is None
     assert generate_patient_summary(8.0, False) is None
+
+
+def test_streaming_chunk_flow(client):
+    """
+    Live path: chunks posted while recording accumulate a transcript, then
+    finalize assembles the same artefacts the whole-file upload produces, so
+    scoring works identically regardless of how the audio arrived.
+    """
+    participant_id = client.post("/participants", json=PARTICIPANT_BODY).json()["participant_id"]
+    session_id = client.post("/sessions", json={"participant_id": participant_id}).json()["session_id"]
+    client.post(f"/sessions/{session_id}/scale-responses", json={
+        "phq9_total": 8, "hamd_total": 11, "phq9_item9": 0, "hamd_suicide_item": 0,
+    })
+
+    total_rows = 0
+    for _ in range(3):
+        r = client.post(
+            f"/sessions/{session_id}/audio/chunk",
+            files={"file": ("chunk.wav", _wav_bytes(duration_sec=20), "audio/wav")},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        total_rows = body["n_rows_total"]
+        assert body["duration_sec"] > 0
+    assert total_rows >= 1
+
+    # Timestamps must keep advancing across chunk boundaries, not restart at 0
+    # for each chunk — the segmenter buckets on absolute session time.
+    live = client.get(f"/sessions/{session_id}/live").json()
+    starts = [row["start_time"] for row in live["rows"]]
+    assert starts == sorted(starts)
+    assert starts[-1] > starts[0]
+
+    r = client.post(f"/sessions/{session_id}/audio/finalize")
+    assert r.status_code == 200
+    assert r.json()["n_transcript_rows"] == total_rows
+
+    session_dir = os.path.join(api_main.LIVE_DATA_ROOT, session_id)
+    assert os.path.exists(os.path.join(session_dir, f"{session_id}_AUDIO.wav"))
+    assert os.path.exists(os.path.join(session_dir, f"{session_id}_TRANSCRIPT.csv"))
+
+    r = client.post(f"/sessions/{session_id}/score")
+    assert r.status_code == 200
+    assert "phq9_pred" in r.json()
+
+
+def test_finalize_without_chunks_is_rejected(client):
+    participant_id = client.post("/participants", json=PARTICIPANT_BODY).json()["participant_id"]
+    session_id = client.post("/sessions", json={"participant_id": participant_id}).json()["session_id"]
+    assert client.post(f"/sessions/{session_id}/audio/finalize").status_code == 400

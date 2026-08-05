@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, ScoreResult, VisitSummary } from "@/lib/api";
+import { api, ApiError, NoteDraft, ScoreResult, TranscriptRow, VisitSummary } from "@/lib/api";
 import SessionStatusStepper from "@/components/SessionStatusStepper";
 import RiskBanner from "@/components/RiskBanner";
 import ScaleForm from "@/components/ScaleForm";
 import AudioRecorder from "@/components/AudioRecorder";
+import LiveTranscript from "@/components/LiveTranscript";
 import ClinicalNotes from "@/components/ClinicalNotes";
 import NoteDraftPanel from "@/components/NoteDraftPanel";
 import ScoreModal from "@/components/ScoreModal";
@@ -22,6 +23,9 @@ export default function VisitWorkspacePage() {
   const [result, setResult] = useState<ScoreResult | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [notesRefreshKey, setNotesRefreshKey] = useState(0);
+  const [recording, setRecording] = useState(false);
+  const [transcriptRows, setTranscriptRows] = useState<TranscriptRow[]>([]);
+  const [liveNote, setLiveNote] = useState<NoteDraft | null>(null);
 
   function refreshVisit() {
     api
@@ -33,6 +37,18 @@ export default function VisitWorkspacePage() {
   }
 
   useEffect(refreshVisit, [id]);
+
+  // Catch up on any transcript/note already streamed for this visit, so a
+  // reload mid-interview doesn't come back to an empty panel.
+  useEffect(() => {
+    api
+      .getLiveState(id)
+      .then((live) => {
+        setTranscriptRows(live.rows);
+        if (live.note) setLiveNote(live.note);
+      })
+      .catch(() => {});
+  }, [id]);
 
   async function runScoring() {
     setScoring(true);
@@ -95,25 +111,36 @@ export default function VisitWorkspacePage() {
 
       <ScaleForm visitId={id} onDone={() => refreshVisit()} />
 
-      <AudioRecorder visitId={id} onDone={() => refreshVisit()} />
+      <AudioRecorder
+        visitId={id}
+        onRecordingChange={setRecording}
+        onTranscriptRows={(rows) => setTranscriptRows((prev) => [...prev, ...rows])}
+        onNote={setLiveNote}
+        onDone={() => {
+          refreshVisit();
+          // Recording finished and the transcript is finalised — score without
+          // making the clinician ask for it.
+          void runScoring();
+        }}
+      />
 
-      <Card className="space-y-3">
-        <h2 className="font-display text-lg font-semibold text-sage-800">Score</h2>
-        <button
-          onClick={runScoring}
-          disabled={scoring}
-          className="rounded-full bg-clay-500 px-4 py-2 text-sm font-semibold text-white hover:bg-clay-600 disabled:opacity-50"
-        >
-          {scoring ? "Scoring…" : "Run scoring"}
-        </button>
-        {scoreError && (
-          <p className="rounded-lg bg-[var(--color-danger-bg)] px-3 py-2 text-sm text-[var(--color-danger)]">
-            {scoreError}
-          </p>
-        )}
-      </Card>
+      <LiveTranscript rows={transcriptRows} recording={recording} />
 
-      <NoteDraftPanel visitId={id} onSaved={() => setNotesRefreshKey((k) => k + 1)} />
+      {scoring && (
+        <p className="text-sm text-sage-700">Scoring this visit…</p>
+      )}
+      {scoreError && (
+        <p className="rounded-lg bg-[var(--color-danger-bg)] px-3 py-2 text-sm text-[var(--color-danger)]">
+          {scoreError}
+        </p>
+      )}
+
+      <NoteDraftPanel
+        visitId={id}
+        liveDraft={liveNote}
+        recording={recording}
+        onSaved={() => setNotesRefreshKey((k) => k + 1)}
+      />
 
       <ClinicalNotes visitId={id} refreshKey={notesRefreshKey} />
 

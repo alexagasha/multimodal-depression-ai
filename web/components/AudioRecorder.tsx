@@ -2,34 +2,53 @@
 
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, NoteDraft, TranscriptRow } from "@/lib/api";
 import { Card } from "@/components/FormField";
+
+/** How much audio to bank before shipping a chunk for live transcription.
+ *  Short enough that captions feel live, long enough that base.en on a
+ *  CPU-only box keeps up (it transcribes a chunk in well under this). */
+const CHUNK_SECONDS = 6;
 
 /**
  * Real live-mic recording: getUserMedia -> AudioContext -> ScriptProcessorNode
- * captures raw Float32 PCM samples, hand-encoded into a 16-bit WAV Blob on
- * stop, then uploaded through the existing, already-tested
- * POST /sessions/{id}/audio endpoint unchanged (it expects a real WAV —
- * browsers' MediaRecorder doesn't encode WAV directly, hence this approach).
+ * captures raw Float32 PCM samples, hand-encoded into 16-bit WAV Blobs
+ * (browsers' MediaRecorder doesn't encode WAV directly, hence this approach).
  * ScriptProcessorNode is deprecated but universally supported; AudioWorklet
  * is the eventual upgrade (see docs/system-roadmap.md Phase 2).
+ *
+ * Streams rather than batching: every CHUNK_SECONDS the audio captured since
+ * the last send is posted to /audio/chunk, so transcription and the AI note
+ * build up *during* the interview instead of after it. On stop it finalizes
+ * (server assembles the full WAV + transcript) and the caller auto-scores —
+ * no "upload", "transcribe" or "run scoring" button anywhere in the flow.
  *
  * A parallel AnalyserNode drives a live canvas waveform while recording —
  * purely visual, doesn't touch the PCM capture path — so the interview
  * feels like a real recording session, not a black box with a timer.
  *
- * Falls back to a plain file upload when the microphone isn't available.
+ * Falls back to a plain whole-file upload when the microphone isn't available.
  */
 export default function AudioRecorder({
   visitId,
   onDone,
+  onTranscriptRows,
+  onNote,
+  onRecordingChange,
 }: {
   visitId: string;
   onDone: (info: { duration_sec: number; n_transcript_rows: number }) => void;
+  /** New transcript lines as they're recognised, for the live transcript. */
+  onTranscriptRows?: (rows: TranscriptRow[]) => void;
+  /** The running AI note, whenever the server redrafts it. */
+  onNote?: (note: NoteDraft) => void;
+  /** Lets the page show live-transcript/note affordances while recording. */
+  onRecordingChange?: (recording: boolean) => void;
 }) {
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<{ duration_sec: number; n_transcript_rows: number } | null>(null);
 
@@ -43,6 +62,11 @@ export default function AudioRecorder({
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
+  // Samples captured but not yet shipped for live transcription. Kept
+  // separate from chunksRef (the full take) so each chunk is sent once.
+  const pendingRef = useRef<Float32Array[]>([]);
+  const streamingRef = useRef(false);
+  const inFlightRef = useRef(false);
 
   useEffect(() => stopWaveform, []);
 
@@ -216,6 +240,37 @@ export default function AudioRecorder({
     rafRef.current = null;
   }
 
+  /**
+   * Ships everything captured since the last send. `flush` ignores the
+   * length threshold so the tail of the recording isn't dropped on stop.
+   * Skips while a previous chunk is still in flight — on slow hardware two
+   * overlapping posts would interleave and corrupt the server-side ordering.
+   */
+  async function sendPendingChunk(flush = false) {
+    if (inFlightRef.current) return;
+    const pending = pendingRef.current;
+    const samples = pending.reduce((n, c) => n + c.length, 0);
+    const minSamples = CHUNK_SECONDS * sampleRateRef.current;
+    if (samples === 0 || (!flush && samples < minSamples)) return;
+
+    pendingRef.current = [];
+    inFlightRef.current = true;
+    setTranscribing(true);
+    try {
+      const blob = encodeWav(pending, sampleRateRef.current);
+      const result = await api.uploadAudioChunk(visitId, blob);
+      if (result.new_rows.length) onTranscriptRows?.(result.new_rows);
+      if (result.note_updated && result.note) onNote?.(result.note);
+    } catch (e) {
+      // A dropped chunk costs a few seconds of captions, not the recording —
+      // the full audio is still banked locally in chunksRef.
+      console.warn("live transcription chunk failed", e);
+    } finally {
+      inFlightRef.current = false;
+      setTranscribing(false);
+    }
+  }
+
   async function startRecording() {
     setError(null);
     setLastResult(null);
@@ -243,21 +298,30 @@ export default function AudioRecorder({
       analyserRef.current = analyser;
 
       processor.onaudioprocess = (e) => {
-        chunksRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+        const samples = new Float32Array(e.inputBuffer.getChannelData(0));
+        chunksRef.current.push(samples); // full take, kept as a local safety net
+        if (streamingRef.current) pendingRef.current.push(samples);
       };
       source.connect(processor);
       processor.connect(ctx.destination);
       source.connect(analyser); // parallel tap, visual only — doesn't affect the WAV capture
 
+      pendingRef.current = [];
+      streamingRef.current = true;
       setRecording(true);
+      onRecordingChange?.(true);
       setSeconds(0);
-      timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
+      timerRef.current = setInterval(() => {
+        setSeconds((s) => s + 1);
+        void sendPendingChunk();
+      }, 1000);
     } catch {
       setError("Microphone unavailable in this browser/session — use the file upload below.");
     }
   }
 
-  function stopRecording(): Blob | null {
+  function stopRecording() {
+    streamingRef.current = false;
     processorRef.current?.disconnect();
     sourceRef.current?.disconnect();
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -266,16 +330,37 @@ export default function AudioRecorder({
     stopWaveform();
     analyserRef.current = null;
     setRecording(false);
-
-    if (chunksRef.current.length === 0) return null;
-    const blob = encodeWav(chunksRef.current, sampleRateRef.current);
-    chunksRef.current = [];
-    return blob;
+    onRecordingChange?.(false);
   }
 
+  /**
+   * Stop -> flush the tail -> finalize server-side -> hand back to the caller,
+   * which kicks off scoring automatically. The clinician clicks Stop and
+   * nothing else.
+   */
   async function handleStop() {
-    const blob = stopRecording();
-    if (blob) await uploadBlob(blob);
+    const hadAudio = chunksRef.current.length > 0;
+    stopRecording();
+    chunksRef.current = [];
+    if (!hadAudio) return;
+
+    setUploading(true);
+    setError(null);
+    try {
+      // Wait out any chunk still in flight so the tail lands after it,
+      // keeping the server-side transcript in order.
+      while (inFlightRef.current) await new Promise((r) => setTimeout(r, 150));
+      await sendPendingChunk(true);
+      while (inFlightRef.current) await new Promise((r) => setTimeout(r, 150));
+
+      const result = await api.finalizeAudio(visitId);
+      setLastResult(result);
+      onDone(result);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function uploadBlob(blob: Blob) {
@@ -301,7 +386,9 @@ export default function AudioRecorder({
     <Card className="space-y-3">
       <h2 className="font-display text-lg font-semibold text-sage-800">Interview audio</h2>
       <p className="text-sm text-sage-600">
-        Record live, or upload a .wav file if the microphone isn&apos;t available here.
+        Transcription and the AI note run as you record. Stop when the interview
+        ends and scoring starts on its own — or upload a .wav if the microphone
+        isn&apos;t available here.
       </p>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -329,6 +416,29 @@ export default function AudioRecorder({
         )}
 
         <AnimatePresence>
+          {recording && transcribing && (
+            <motion.span
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex items-center gap-1.5 text-sm text-sage-600"
+            >
+              <span className="flex gap-0.5">
+                {[0, 1, 2].map((i) => (
+                  <motion.span
+                    key={i}
+                    className="h-1 w-1 rounded-full bg-clay-500"
+                    animate={{ opacity: [0.2, 1, 0.2] }}
+                    transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
+                  />
+                ))}
+              </span>
+              Transcribing
+            </motion.span>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
           {uploading && (
             <motion.span
               initial={{ opacity: 0, x: -6 }}
@@ -336,7 +446,7 @@ export default function AudioRecorder({
               exit={{ opacity: 0 }}
               className="flex items-center gap-1 text-sm text-sage-600"
             >
-              Uploading &amp; transcribing
+              Finalising &amp; scoring
               <span className="flex gap-0.5">
                 {[0, 1, 2].map((i) => (
                   <motion.span

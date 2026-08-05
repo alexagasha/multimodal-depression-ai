@@ -11,11 +11,24 @@ uvicorn[standard]>=0.29
 python-multipart>=0.0.9      # multipart/form audio uploads
 httpx>=0.27                  # FastAPI TestClient dependency
 
+# Live streaming transcription (src/pipelines/asr_pipeline.py). faster-whisper
+# rather than openai-whisper because it runs several times quicker on CPU and
+# needs no torch at all — what makes real-time chunked ASR feasible without a
+# GPU. Measured on an i7-6600U (2c/4t, no GPU): base.en int8 ~3.1-3.8s per 6s
+# chunk (~1.6-1.9x realtime), tiny.en ~1.9s (~3x). Set DEP_ASR_MODEL=tiny.en if
+# base.en can't keep up on slower hardware.
+faster-whisper>=1.2
+# 4.8.x segfaults on model load on older (pre-AVX-512) CPUs such as Skylake
+# mobile; 4.6.0 is the newest that loads reliably there.
+ctranslate2==4.6.0
+# ctranslate2 4.6.0 still imports pkg_resources, removed in setuptools 81.
+setuptools<81
+
 # Real backbones (install when swapping mock encoders for real ones):
 # torch>=2.2
 # transformers>=4.40        # BERT (text) + Wav2Vec2 (audio), both English
 # librosa>=0.10              # audio resampling / noise reduction
 # soundfile>=0.12            # optional: WAV reading for real/E-DAIC data (scipy fallback exists)
 # shap>=0.45                 # for richer XAI attribution later
-# openai-whisper>=20231117   # real ASR (src/pipelines/asr_pipeline.py); mock fallback otherwise
+# openai-whisper>=20231117   # alternative ASR backend; faster-whisper above is preferred on CPU
 # anthropic>=0.34            # real GenUI narrative (api/genui.py); template fallback otherwise

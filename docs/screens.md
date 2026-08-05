@@ -64,6 +64,10 @@ A patient's full record — the hub for a returning patient.
 ## 4. Visit workspace — `/visits/[id]` (`web/app/visits/[id]/page.tsx`)
 
 Where a visit is actually conducted — the longest, most stateful screen.
+Recording, transcription, and note-drafting all run **concurrently**: the
+clinician presses Record, and the transcript and AI note assemble themselves
+live; pressing Stop finalizes and scores automatically. The only buttons in
+the flow are Record and Stop.
 
 - Status stepper showing where the visit is (scales / audio / scored).
 - Referral-flag banner (`RiskBanner`) if the safety flag is already active
@@ -72,14 +76,19 @@ Where a visit is actually conducted — the longest, most stateful screen.
 - **PHQ-9/HAM-D scale form** (`ScaleForm`) — clinician-administered scoring,
   item-by-item, with optional read-aloud per item for accessibility.
 - **Audio recorder** (`AudioRecorder`) — live mic capture via
-  `getUserMedia`/`AudioContext` (WAV, with a file-upload fallback), a live
-  waveform drawn from an `AnalyserNode` tap while recording, and an animated
-  "uploading & transcribing" indicator once stopped.
-- **Run scoring** button — sends the visit through the fusion pipeline and
-  opens the score modal (screen 5) with the result.
-- **AI-drafted clinical note** (`NoteDraftPanel`) — LLM-generated SOAP-style
-  draft the clinician can edit before saving; reports "unavailable" with no
-  fallback if no LLM key is set.
+  `getUserMedia`/`AudioContext` (WAV, with a file-upload fallback), and a
+  live waveform drawn from an `AnalyserNode` tap while recording.
+  **Streams rather than batching**: every ~6s the audio captured since the
+  last send is posted to `/audio/chunk`, so transcription and the AI note
+  build up *during* the interview. On Stop it finalizes and scoring starts
+  on its own.
+- **Live transcript** (`LiveTranscript`) — recognised speech appears line by
+  line while the interview is still running, timestamped and auto-scrolling.
+- **AI-drafted clinical note** (`NoteDraftPanel`) — writes itself as the
+  patient talks, redrafted from the running transcript; no "draft this"
+  button. Once the clinician edits a section, live updates pause so typed
+  text is never overwritten. Reports "unavailable" with no fallback if no
+  LLM key is set.
 - **Clinical notes** (`ClinicalNotes`) — append-only note history for the
   visit.
 - "View last result" button (once scored) reopens the score modal without

@@ -105,6 +105,28 @@ export interface NoteDraft {
   plan: string;
 }
 
+/** One transcribed line, in the same shape the batch pipeline produces. */
+export interface TranscriptRow {
+  start_time: number;
+  stop_time: number;
+  speaker: string;
+  value: string;
+}
+
+export interface ChunkResult {
+  new_rows: TranscriptRow[];
+  duration_sec: number;
+  n_rows_total: number;
+  note: NoteDraft | null;
+  note_updated: boolean;
+}
+
+export interface LiveState {
+  rows: TranscriptRow[];
+  duration_sec: number;
+  note: NoteDraft | null;
+}
+
 export interface TreatmentEventIn {
   event_type: "medication_change" | "therapy_session" | "other";
   description: string;
@@ -214,6 +236,25 @@ export const api = {
       { method: "POST", body: form }
     );
   },
+
+  /** Live streaming: post ~6s of audio mid-recording for incremental
+   *  transcription + a running AI note. See api/main.py's /audio/chunk. */
+  uploadAudioChunk: (visitId: string, blob: Blob, filename = "chunk.wav") => {
+    const form = new FormData();
+    form.append("file", blob, filename);
+    return request<ChunkResult>(`/sessions/${visitId}/audio/chunk`, {
+      method: "POST",
+      body: form,
+    });
+  },
+
+  finalizeAudio: (visitId: string) =>
+    request<{ duration_sec: number; n_transcript_rows: number }>(
+      `/sessions/${visitId}/audio/finalize`,
+      { method: "POST" }
+    ),
+
+  getLiveState: (visitId: string) => request<LiveState>(`/sessions/${visitId}/live`),
 
   scoreVisit: (visitId: string) =>
     request<ScoreResult>(`/sessions/${visitId}/score`, { method: "POST" }),
