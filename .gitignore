@@ -45,3 +45,15 @@ data/live/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Real study data (KoBoToolbox export: identifiable clinical audio + scores).
+# The adapter writes outside the repo by default; these patterns are a backstop
+# for anyone who runs it with --out pointing inside the tree. Never commit these.
+data/kobo/sessions/
+data/kobo/audio/
+data/kobo/*.xlsx
+data/kobo/*.csv
+data/kobo/registry.json
+*.m4a
+kobo_clean_analytic.xlsx
+kobo_pid_key.xlsx

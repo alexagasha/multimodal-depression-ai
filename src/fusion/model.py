@@ -48,7 +48,16 @@ class FusionHead:
     Replace with FusionHeadTorch when ready to train for real.
     """
 
-    def __init__(self, input_dim=FUSION_INPUT_DIM, seed=0):
+    def __init__(self, input_dim=FUSION_INPUT_DIM, seed=0, decision_threshold=None):
+        # Decision threshold for caseness, in PREDICTED-HAM-D space rather than
+        # clinical HAM-D space. A regression head shrinks toward the training
+        # mean, so its outputs occupy a narrower range than the instrument does:
+        # with 83% of this cohort above 7 and a mean of 13.3, predictions rarely
+        # fall below the clinical cutoff and specificity collapses to zero even
+        # at AUC 0.83. The calibrated value comes from src/eval/calibrate.py,
+        # which picks it on training folds only, and is stored with the weights.
+        # None -> fall back to the clinical cutoff (previous behaviour).
+        self.decision_threshold = decision_threshold
         rng = np.random.default_rng(seed)
         scale1 = np.sqrt(2.0 / input_dim)
         scale2 = np.sqrt(2.0 / HIDDEN1)
@@ -70,18 +79,29 @@ class FusionHead:
             "hamd": float(np.clip(out[1], *HAMD_RANGE)),
         }
 
+    @property
+    def caseness_threshold(self) -> float:
+        """The cut point actually used, calibrated if one was trained."""
+        return (HAMD_CASENESS_THRESHOLD if self.decision_threshold is None
+                else float(self.decision_threshold))
+
     def predict_label(self, x: np.ndarray) -> int:
-        """Binary caseness: 1 if predicted HAM-D >= threshold, else 0 (HAM-D-derived)."""
-        return int(self.forward(x)["hamd"] >= HAMD_CASENESS_THRESHOLD)
+        """Binary caseness from predicted HAM-D, at the calibrated threshold."""
+        return int(self.forward(x)["hamd"] >= self.caseness_threshold)
 
     # --- persistence: save / load trained weights as a numpy .npz ---
     def get_weights(self) -> dict:
-        return {"W1": self.W1, "b1": self.b1, "W2": self.W2,
-                "b2": self.b2, "W3": self.W3, "b3": self.b3}
+        w = {"W1": self.W1, "b1": self.b1, "W2": self.W2,
+             "b2": self.b2, "W3": self.W3, "b3": self.b3}
+        if self.decision_threshold is not None:
+            w["decision_threshold"] = np.array(float(self.decision_threshold))
+        return w
 
     def set_weights(self, w: dict):
         for k in ("W1", "b1", "W2", "b2", "W3", "b3"):
             setattr(self, k, np.asarray(w[k], dtype=np.float32))
+        if "decision_threshold" in w:
+            self.decision_threshold = float(np.asarray(w["decision_threshold"]))
         return self
 
     def save(self, path):
@@ -95,8 +115,15 @@ class FusionHead:
         if in_dim != FUSION_INPUT_DIM:
             print(f"[FusionHead.load] note: weights input_dim={in_dim} "
                   f"but current FUSION_INPUT_DIM={FUSION_INPUT_DIM}")
-        return cls(input_dim=in_dim).set_weights({k: d[k] for k in
-                   ("W1", "b1", "W2", "b2", "W3", "b3")})
+        keys = ["W1", "b1", "W2", "b2", "W3", "b3"]
+        if "decision_threshold" in d.files:
+            keys.append("decision_threshold")
+        m = cls(input_dim=in_dim).set_weights({k: d[k] for k in keys})
+        if m.decision_threshold is None:
+            print("[FusionHead.load] no calibrated threshold in weights; using the "
+                  "clinical cutoff, which yields near-zero specificity on this cohort. "
+                  "Run src/eval/calibrate.py and save the threshold with the weights.")
+        return m
 
 
 # ---------------------------------------------------------------------------

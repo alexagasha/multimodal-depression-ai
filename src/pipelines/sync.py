@@ -20,14 +20,30 @@ INTERVIEWER_SPEAKER_NAMES = {"Ellie", "Interviewer"}
 
 def load_transcript(pid, data_root=DATA_ROOT):
     path = os.path.join(data_root, str(pid), f"{pid}_TRANSCRIPT.csv")
-    return pd.read_csv(path)
+    df = pd.read_csv(path)
+    # A row with no text reads back as NaN, and str(NaN) is the literal "nan".
+    # Left alone, every untranscribed turn feeds the string "nan" to BERT as if
+    # the participant had said it — real risk here, since clips too short to
+    # transcribe are deliberately left blank.
+    if "value" in df.columns:
+        df["value"] = df["value"].fillna("").astype(str)
+    return df
 
 
 def participant_only_ranges(transcript_df):
-    """Return list of (start, end, text) for participant-only turns."""
+    """Return list of (start, end, text) for participant-only turns.
+
+    Turns with no text are dropped rather than pooled as empty strings, so a
+    segment made up entirely of untranscribed turns yields no text at all
+    instead of a run of blanks."""
     mask = ~transcript_df["speaker"].isin(INTERVIEWER_SPEAKER_NAMES)
     rows = transcript_df[mask]
-    return [(r.start_time, r.stop_time, str(r.value)) for r in rows.itertuples(index=False)]
+    out = []
+    for r in rows.itertuples(index=False):
+        text = "" if pd.isna(r.value) else str(r.value).strip()
+        if text:
+            out.append((r.start_time, r.stop_time, text))
+    return out
 
 
 def build_segments(pid, data_root=DATA_ROOT, segment_len=SEGMENT_LEN_SEC):
