@@ -19,6 +19,7 @@ Outputs: phq9 in [0, 27], hamd in [0, 44], clamped at inference.
 Binary caseness (the primary classification label) is HAM-D-derived — the
 interviewer-rated score is the clinical gold standard. See HAMD_CASENESS_THRESHOLD.
 """
+import json
 import os
 
 import numpy as np
@@ -131,6 +132,115 @@ class FusionHead:
 # It trains an identical MLP, then exports the weights back into this numpy
 # FusionHead via .save()/.load() — so inference stays numpy-only (no torch).
 # ---------------------------------------------------------------------------
+
+
+class LinearHead:
+    """Ridge regression as a single affine map: y = Wx + b.
+
+    WHY THIS EXISTS
+        Evaluation over the whole cohort (src/eval/benchmark.py) found ridge
+        beat the MLP above on every feature set examined — 0.826 vs 0.695 AUC on
+        prosodic features, 0.791 vs 0.673 on linguistic — which is what a
+        414,000-parameter network does when fitted to ~108 participants per
+        fold. This head is therefore the one to serve.
+
+    THE STANDARDISER IS FOLDED IN
+        The evaluated model is a StandardScaler followed by Ridge. Rather than
+        ship the scaler separately and risk it drifting out of sync with the
+        weights, both collapse into one affine transform:
+
+            W' = W / scale
+            b' = b - W @ (mean / scale)
+
+        so inference is a single matrix multiply with no preprocessing state.
+        scripts/fit_final_model.py asserts this reproduces the sklearn pipeline
+        before exporting.
+
+    Interface matches FusionHead exactly, so api/main.py needs no special case.
+    """
+
+    def __init__(self, W=None, b=None, input_dim=None, decision_threshold=None,
+                 meta=None):
+        d = input_dim if input_dim is not None else FUSION_INPUT_DIM
+        self.W = (np.zeros((OUTPUT_DIM, d), dtype=np.float32)
+                  if W is None else np.asarray(W, dtype=np.float32))
+        self.b = (np.zeros(OUTPUT_DIM, dtype=np.float32)
+                  if b is None else np.asarray(b, dtype=np.float32))
+        self.decision_threshold = decision_threshold
+        self.meta = meta or {}          # provenance: date, seed, feature set
+
+    @property
+    def input_dim(self) -> int:
+        return int(self.W.shape[1])
+
+    def forward(self, x: np.ndarray) -> dict:
+        x = np.asarray(x, dtype=np.float32).ravel()
+        if x.shape[0] != self.input_dim:
+            raise ValueError(
+                f"feature vector has {x.shape[0]} dimensions but these weights "
+                f"expect {self.input_dim}. The served feature set must match the "
+                f"one the model was fitted on.")
+        out = (self.W @ x + self.b).ravel()
+        return {
+            "phq9": float(np.clip(out[0], *PHQ9_RANGE)),
+            "hamd": float(np.clip(out[1], *HAMD_RANGE)),
+        }
+
+    @property
+    def caseness_threshold(self) -> float:
+        return (HAMD_CASENESS_THRESHOLD if self.decision_threshold is None
+                else float(self.decision_threshold))
+
+    def predict_label(self, x: np.ndarray) -> int:
+        return int(self.forward(x)["hamd"] >= self.caseness_threshold)
+
+    def contributions(self, x: np.ndarray) -> np.ndarray:
+        """Per-feature contribution to the HAM-D prediction: W[hamd] * x.
+
+        Exact for a linear model rather than approximated, which is what makes
+        the attribution shown to a clinician trustworthy."""
+        x = np.asarray(x, dtype=np.float32).ravel()
+        return (self.W[1] * x).astype(np.float32)
+
+    # --- persistence ---
+    def get_weights(self) -> dict:
+        w = {"W": self.W, "b": self.b}
+        if self.decision_threshold is not None:
+            w["decision_threshold"] = np.array(float(self.decision_threshold))
+        if self.meta:
+            w["meta_json"] = np.array(json.dumps(self.meta))
+        return w
+
+    def save(self, path):
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        np.savez(path, **self.get_weights())
+
+    @classmethod
+    def load(cls, path):
+        d = np.load(path, allow_pickle=False)
+        meta = {}
+        if "meta_json" in d.files:
+            try:
+                meta = json.loads(str(d["meta_json"]))
+            except Exception:
+                meta = {}
+        m = cls(W=d["W"], b=d["b"], meta=meta,
+                decision_threshold=(float(d["decision_threshold"])
+                                    if "decision_threshold" in d.files else None))
+        if m.decision_threshold is None:
+            print("[LinearHead.load] no calibrated threshold in weights; falling "
+                  "back to the clinical cutoff, which gives near-zero specificity "
+                  "on this cohort. See src/eval/calibrate.py.")
+        return m
+
+
+def load_head(path):
+    """Load whichever head a weights file contains.
+
+    Lets api/main.py stay agnostic while the MLP weights format remains
+    supported for older exports."""
+    d = np.load(path, allow_pickle=False)
+    return LinearHead.load(path) if "W" in d.files else FusionHead.load(path)
 
 
 if __name__ == "__main__":

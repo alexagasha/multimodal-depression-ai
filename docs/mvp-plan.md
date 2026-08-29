@@ -1,6 +1,6 @@
 # MVP plan: connecting the validated model to the dashboard
 
-**Status:** not started · **Estimate:** 4 working days · **Written:** 2026-08-20
+**Status:** Day 1 complete · **Estimate:** 4 working days · **Written:** 2026-08-20
 
 The dashboard, API and model pipeline all exist and run end to end. What does
 not exist is a *trained model behind them*. This plan closes that gap and
@@ -67,12 +67,41 @@ the separation that was designed in for exactly this situation.
    `outputs/weights/fusion_head.npz` containing `W`, `b`, `decision_threshold`,
    `feature_dim`, and provenance metadata (cache checksum, date, seed).
 
-### Acceptance criteria
+### Acceptance criteria — all met 2026-08-20
 
-- [ ] `LinearHead.forward` reproduces `sklearn` pipeline predictions on all 135 cached vectors to within 1e-4.
-- [ ] `outputs/weights/fusion_head.npz` exists and loads.
-- [ ] `FusionHead.load` on the new file returns a head whose `caseness_threshold` is the calibrated value, not 7.0.
-- [ ] Existing test suite still passes (48 tests).
+- [x] `LinearHead.forward` reproduces the sklearn pipeline on all 135 cached vectors to within 1e-4 — actual deviation 7.1e-15 (808) and 5.4e-13 (1552).
+- [x] `outputs/weights/fusion_head.npz` exists and loads.
+- [x] Loading returns a head whose `caseness_threshold` is the calibrated value, not 7.0.
+- [x] Test suite passes (48 passed, 1 skipped).
+
+### Outcome
+
+Two heads were exported rather than one, following the sequencing note at the
+foot of this plan:
+
+| File | Features | Dim | Threshold | Purpose |
+|---|---|---|---|---|
+| `fusion_head.npz` | text + wav2vec2 + metadata | 1552 | 11.39 | matches what `score_session` assembles **today**, so the API serves a real model immediately |
+| `fusion_head_808.npz` | text + prosody + metadata | 808 | 10.55 | the evaluated best; becomes the default at Day 3 |
+
+Serving the trained head instead of the untrained one changes in-sample
+correlation with observed HAM-D from r = 0.10 to r = 0.83, and predicted
+caseness from a constant to 90 of 135. **Those in-sample figures are apparent
+performance, not generalisation** — the cross-validated equivalents (r = 0.469,
+MAE 5.24 for this feature set) remain the ones to report.
+
+`api/main.py` now loads via `load_head` and **refuses weights whose dimension
+does not match `FUSION_INPUT_DIM`**, falling back to an untrained head with a
+loud warning rather than multiplying a vector assembled from different features.
+Without that check, the Day 3 migration could have silently served plausible
+nonsense.
+
+### Open decision
+
+`outputs/` is git-ignored, so the weights are not committed and a fresh clone
+has no model. Either commit the weights (they are coefficients, not participant
+data, but are derived from 135 clinical interviews) or document regeneration as
+a deployment step. This needs a decision before anyone else runs the app.
 
 ### Notes
 

@@ -35,9 +35,9 @@ from src.pipelines.sync import build_segments
 from src.pipelines.text_pipeline import BertTextEncoder, run_text_pipeline
 from src.pipelines.audio_pipeline import Wav2Vec2AudioEncoder, run_audio_pipeline, _load_wav
 from src.pipelines.metadata_pipeline import run_metadata_pipeline
-from src.pipelines.asr_pipeline import WhisperASR, run_asr_pipeline, is_probably_silence
-from src.fusion.aggregate import build_participant_vector
-from src.fusion.model import FusionHead, HAMD_CASENESS_THRESHOLD
+from src.pipelines.asr_pipeline import build_asr, run_asr_pipeline, is_probably_silence
+from src.fusion.aggregate import build_participant_vector, FUSION_INPUT_DIM
+from src.fusion.model import FusionHead, HAMD_CASENESS_THRESHOLD, load_head
 from src.xai.attribution import explain_participant
 from src.safety.risk_flag import flag_risk
 from api.storage import store
@@ -72,10 +72,35 @@ app.add_middleware(
 # aren't installed (see each module's docstring) — safe for local dev.
 _text_enc = BertTextEncoder()
 _audio_enc = Wav2Vec2AudioEncoder()
-_asr = WhisperASR()
-_fusion_head = (
-    FusionHead.load(WEIGHTS_PATH) if os.path.exists(WEIGHTS_PATH) else FusionHead()
-)
+_asr = build_asr()  # DEP_ASR_PROVIDER: local (default) | openai | groq | deepgram
+def _load_fusion_head():
+    """Load trained weights, refusing any that do not match the served features.
+
+    A head fitted on a different feature set will happily multiply a vector of
+    the wrong length or, worse, the right length assembled from different
+    features, and return plausible nonsense. Checking the dimension here is the
+    only place that mismatch is cheap to catch. An untrained fallback is loud
+    because its predictions are random — see docs/mvp-plan.md."""
+    if not os.path.exists(WEIGHTS_PATH):
+        print("[model] no trained weights at outputs/weights/fusion_head.npz; "
+              "serving an UNTRAINED head. Severity scores are random. "
+              "Run scripts/fit_final_model.py.")
+        return FusionHead()
+    head = load_head(WEIGHTS_PATH)
+    dim = getattr(head, "input_dim", None) or int(head.W1.shape[1])
+    if dim != FUSION_INPUT_DIM:
+        print(f"[model] weights expect {dim} features but this build assembles "
+              f"{FUSION_INPUT_DIM}; refusing to use them and serving an UNTRAINED "
+              f"head. Severity scores are random until the feature sets agree.")
+        return FusionHead()
+    meta = getattr(head, "meta", {}) or {}
+    print(f"[model] loaded {type(head).__name__}: {meta.get('feature_set', dim)} "
+          f"| threshold {head.caseness_threshold:.2f} "
+          f"| fitted {meta.get('fitted', 'unknown')}")
+    return head
+
+
+_fusion_head = _load_fusion_head()
 
 
 class ParticipantIn(BaseModel):
