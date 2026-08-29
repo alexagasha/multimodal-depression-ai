@@ -96,12 +96,22 @@ loud warning rather than multiplying a vector assembled from different features.
 Without that check, the Day 3 migration could have silently served plausible
 nonsense.
 
-### Open decision
+### Decision: weights are committed
 
-`outputs/` is git-ignored, so the weights are not committed and a fresh clone
-has no model. Either commit the weights (they are coefficients, not participant
-data, but are derived from 135 clinical interviews) or document regeneration as
-a deployment step. This needs a decision before anyone else runs the app.
+Resolved 2026-08-20 — the weights are committed so a fresh clone has a working
+model rather than silently falling back to an untrained head.
+
+`.gitignore` unignores `outputs/weights/*.npz` stepwise, because git cannot
+re-include a path inside an ignored directory. Everything else under `outputs/`
+stays ignored, including `outputs/cache/fusion_vectors.npz`, which does contain
+per-participant feature vectors and must not be committed.
+
+The weight files hold only `W`, `b`, `decision_threshold` and provenance
+metadata — 24 KB in total, no participant data. Note that ridge coefficients
+fitted where features outnumber participants are a linear function of the
+training data; that is not a practical disclosure risk with frozen-encoder
+embeddings and heavy regularisation, but it is the reason the feature cache
+itself stays out of the repository.
 
 ### Notes
 

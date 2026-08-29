@@ -38,7 +38,15 @@ wheels/
 Thumbs.db
 
 # Project-specific
-outputs/
+# outputs/ is generated and ignored, EXCEPT the trained weights: the app is
+# unusable without them and falls back to an untrained head that returns random
+# severity scores. They are model coefficients (W, b, threshold, provenance) —
+# no participant data. Git cannot re-include a path inside an ignored directory,
+# hence the stepwise unignore rather than a plain "!outputs/weights/".
+outputs/*
+!outputs/weights/
+outputs/weights/*
+!outputs/weights/*.npz
 data/synthetic/sessions/
 data/edaic/sessions/
 data/live/
