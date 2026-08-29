@@ -188,6 +188,17 @@ def _load_wav(path):
     return audio.astype(np.float32), int(sr)
 
 
+def _load_session_audio(pid, data_root):
+    """Whatever waveform format the session holds.
+
+    Delegates to audio_pipeline.load_audio, which already understands both the
+    real .wav sessions and the synthetic .npy fixtures — so both branches read
+    the same bytes and the fixtures exercise the configuration that actually
+    ships, rather than a path kept alive only for tests."""
+    from .audio_pipeline import load_audio
+    return load_audio(pid, data_root=data_root)
+
+
 def prosody_from_turns(audio, turns, sr=SR):
     """turns: iterable of (start_sec, stop_sec). Returns the 24-d vector."""
     rows = []
@@ -204,14 +215,12 @@ def prosody_from_turns(audio, turns, sr=SR):
 def run_prosody_pipeline(pid, data_root=DATA_ROOT):
     """Participant-level prosody from the session waveform and transcript."""
     session = os.path.join(data_root, str(pid))
-    wav = os.path.join(session, f"{pid}_AUDIO.wav")
     tsv = os.path.join(session, f"{pid}_TRANSCRIPT.csv")
-    if not os.path.exists(wav):
-        raise FileNotFoundError(f"no {pid}_AUDIO.wav in {session}")
-    audio, sr = _load_wav(wav)
+    audio, sr = _load_session_audio(pid, data_root)
     if sr != SR:
-        raise ValueError(f"{pid}_AUDIO.wav is {sr} Hz; prosody features were "
-                         f"computed at {SR} Hz and are not comparable across rates")
+        raise ValueError(f"session {pid} audio is {sr} Hz; these features were "
+                         f"computed at {SR} Hz and pitch and pause measures are "
+                         f"not comparable across sample rates")
 
     if os.path.exists(tsv):
         t = pd.read_csv(tsv)

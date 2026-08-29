@@ -18,14 +18,43 @@ import numpy as np
 from typing import Dict
 
 from src.fusion.model import FusionHead
-from src.fusion.aggregate import TEXT_DIM, AUDIO_DIM, METADATA_DIM, FUSION_INPUT_DIM
+from src.fusion.aggregate import (TEXT_DIM, ACOUSTIC, ACOUSTIC_DIM, METADATA_DIM,
+                                  FUSION_INPUT_DIM)
 
-# Modality slices within the fusion vector [text | audio | metadata]
+# Modality slices within the fusion vector [text | acoustic | metadata].
+# The acoustic block is 768 wide under wav2vec2 and 24 under prosody, so the
+# slices are derived rather than hard-coded — a stale boundary here would
+# attribute one modality's contribution to another without any error.
 MODALITY_SLICES = {
     "text":     (0, TEXT_DIM),
-    "audio":    (TEXT_DIM, TEXT_DIM + AUDIO_DIM),
-    "metadata": (TEXT_DIM + AUDIO_DIM, TEXT_DIM + AUDIO_DIM + METADATA_DIM),
+    "audio":    (TEXT_DIM, TEXT_DIM + ACOUSTIC_DIM),
+    "metadata": (TEXT_DIM + ACOUSTIC_DIM, TEXT_DIM + ACOUSTIC_DIM + METADATA_DIM),
 }
+
+
+def _named_acoustic_drivers(fusion_vec, model, top_k=4):
+    """The individual prosodic measures pushing this prediction, by name.
+
+    Only meaningful for a linear head, where a feature's contribution is exactly
+    coefficient x value rather than an approximation, and only when the acoustic
+    block is the 24 named prosodic measures. A 768-dimensional self-supervised
+    embedding has no nameable dimensions, so this returns nothing for it — which
+    is itself part of why the prosodic feature set was preferred."""
+    if ACOUSTIC != "prosody" or not hasattr(model, "contributions"):
+        return []
+    try:
+        from src.pipelines.prosody_pipeline import FEATURE_NAMES
+    except Exception:
+        return []
+    start, end = MODALITY_SLICES["audio"]
+    contrib = np.asarray(model.contributions(fusion_vec))[start:end]
+    if contrib.shape[0] != len(FEATURE_NAMES):
+        return []
+    order = np.argsort(-np.abs(contrib))[:top_k]
+    return [{"feature": FEATURE_NAMES[i],
+             "contribution": round(float(contrib[i]), 4),
+             "direction": "toward depression" if contrib[i] > 0 else "away from depression"}
+            for i in order]
 
 
 def explain_participant(
@@ -54,11 +83,15 @@ def explain_participant(
     total = sum(abs(v) for v in attributions.values()) or 1.0
     normalised = {k: round(v / total, 4) for k, v in attributions.items()}
 
-    return {
+    out = {
         "baseline_phq9_pred": round(float(baseline_pred), 3),
         "baseline_hamd_pred": round(float(baseline["hamd"]), 3),
         "modality_attributions": normalised,
     }
+    drivers = _named_acoustic_drivers(fusion_vec, model)
+    if drivers:
+        out["acoustic_drivers"] = drivers
+    return out
 
 
 def explain_batch(predictions_df, fusion_vecs: dict, model: FusionHead):

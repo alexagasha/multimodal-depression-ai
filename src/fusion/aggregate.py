@@ -28,10 +28,11 @@ METADATA_DIM = 16      # keep in sync with metadata_pipeline.EMBED_DIM
 #             clear its own permutation null, and lost to three measures of
 #             speech quantity. Retained for the thesis comparison only.
 #
-# Default is still wav2vec2 while api/main.py assembles that vector; Day 3 of
-# docs/mvp-plan.md flips it to prosody together with the scoring path, so that
-# the served features and the served weights change in one step.
-ACOUSTIC = os.environ.get("DEP_ACOUSTIC", "wav2vec2").strip().lower()
+# Default is prosody as of Day 3 of docs/mvp-plan.md, flipped together with the
+# scoring path and the shipped weights so the served features and the served
+# model always describe the same thing. Set DEP_ACOUSTIC=wav2vec2 to reproduce
+# the thesis comparison; outputs/weights/fusion_head_1552.npz goes with it.
+ACOUSTIC = os.environ.get("DEP_ACOUSTIC", "prosody").strip().lower()
 if ACOUSTIC not in ("wav2vec2", "prosody"):
     raise ValueError(f"DEP_ACOUSTIC must be 'wav2vec2' or 'prosody', got {ACOUSTIC!r}")
 ACOUSTIC_DIM = AUDIO_DIM if ACOUSTIC == "wav2vec2" else PROSODY_DIM
@@ -44,6 +45,22 @@ def mean_pool(embeddings: list) -> np.ndarray:
     if not embeddings:
         raise ValueError("Cannot pool empty embedding list — participant has no valid segments.")
     return np.mean(np.stack(embeddings, axis=0), axis=0).astype(np.float32)
+
+
+def run_acoustic_pipeline(pid, segments, audio_encoder=None, data_root=None):
+    """The acoustic representation for one participant, per DEP_ACOUSTIC.
+
+    Single switch point. Every caller that assembles a fusion vector — the API,
+    training, batch inference, the robustness harness — goes through here, so
+    the served features cannot drift apart between paths. Imports are deferred
+    to keep the wav2vec2 encoder out of processes that do not need it.
+    """
+    if ACOUSTIC == "prosody":
+        from src.pipelines.prosody_pipeline import run_prosody_pipeline
+        return run_prosody_pipeline(pid, data_root=data_root)
+    from src.pipelines.audio_pipeline import run_audio_pipeline, Wav2Vec2AudioEncoder
+    enc = audio_encoder if audio_encoder is not None else Wav2Vec2AudioEncoder()
+    return run_audio_pipeline(pid, segments, enc, data_root=data_root)
 
 
 def build_participant_vector(text_embeddings, acoustic, metadata_vec):

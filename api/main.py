@@ -35,8 +35,9 @@ from src.pipelines.sync import build_segments
 from src.pipelines.text_pipeline import BertTextEncoder, run_text_pipeline
 from src.pipelines.audio_pipeline import Wav2Vec2AudioEncoder, run_audio_pipeline, _load_wav
 from src.pipelines.metadata_pipeline import run_metadata_pipeline
+from src.pipelines.prosody_pipeline import run_prosody_pipeline
 from src.pipelines.asr_pipeline import build_asr, run_asr_pipeline, is_probably_silence
-from src.fusion.aggregate import build_participant_vector, FUSION_INPUT_DIM
+from src.fusion.aggregate import build_participant_vector, FUSION_INPUT_DIM, ACOUSTIC
 from src.fusion.model import FusionHead, HAMD_CASENESS_THRESHOLD, load_head
 from src.xai.attribution import explain_participant
 from src.safety.risk_flag import flag_risk
@@ -53,7 +54,15 @@ from api.caseload_query import answer_query
 from api.analytics_summary import generate_analytics_narrative
 
 LIVE_DATA_ROOT = os.path.join(os.path.dirname(__file__), "..", "data", "live", "sessions")
-WEIGHTS_PATH = os.path.join(os.path.dirname(__file__), "..", "outputs", "weights", "fusion_head.npz")
+# fusion_head.npz is the served model and tracks DEP_ACOUSTIC's default
+# (prosody, 808). The wav2vec2 comparison ships as fusion_head_1552.npz, so
+# setting DEP_ACOUSTIC=wav2vec2 alone would load weights of the wrong width and
+# fall back to an untrained head — pick the matching file automatically, and
+# allow an explicit override for a locally refitted model.
+_DEFAULT_WEIGHTS = ("fusion_head.npz" if os.environ.get("DEP_ACOUSTIC", "prosody").strip().lower()
+                    != "wav2vec2" else "fusion_head_1552.npz")
+WEIGHTS_PATH = os.environ.get("DEP_WEIGHTS") or os.path.join(
+    os.path.dirname(__file__), "..", "outputs", "weights", _DEFAULT_WEIGHTS)
 
 app = FastAPI(title="Depression Detection API", version="0.1.0")
 
@@ -465,18 +474,28 @@ def score_session(session_id: str):
         raise HTTPException(400, "no transcript segments — upload audio first")
 
     text_embs = run_text_pipeline(segments, _text_enc)
-    audio_embs = run_audio_pipeline(session_id, segments, _audio_enc, data_root=LIVE_DATA_ROOT)
+    if ACOUSTIC == "prosody":
+        # Participant-level already — aggregated across turns by the pipeline,
+        # so it must not be pooled again.
+        acoustic = run_prosody_pipeline(session_id, data_root=LIVE_DATA_ROOT)
+    else:
+        acoustic = run_audio_pipeline(session_id, segments, _audio_enc,
+                                      data_root=LIVE_DATA_ROOT)
     metadata_vec = run_metadata_pipeline(session_id, data_root=LIVE_DATA_ROOT)
-    fusion_vec = build_participant_vector(text_embs, audio_embs, metadata_vec)
+    fusion_vec = build_participant_vector(text_embs, acoustic, metadata_vec)
 
     scores = _fusion_head.forward(fusion_vec)
-    binary_pred = int(scores["hamd"] >= HAMD_CASENESS_THRESHOLD)
+    # Calibrated cut point, not the clinical one. A regularised regression
+    # shrinks toward the training mean, so at HAM-D >= 7 this classified almost
+    # everyone as a case (specificity 0.19) despite ranking them well.
+    threshold = _fusion_head.caseness_threshold
+    binary_pred = int(scores["hamd"] >= threshold)
     xai = explain_participant(fusion_vec, _fusion_head)
     risk_flag = flag_risk(scale["phq9_item9"], scale["hamd_suicide_item"])
 
     narrative = generate_narrative(
         scores["phq9"], scores["hamd"], binary_pred,
-        xai["modality_attributions"], risk_flag, HAMD_CASENESS_THRESHOLD,
+        xai["modality_attributions"], risk_flag, threshold,
     )
     transcript_text = " ".join(seg["text"] for seg in segments if seg.get("text"))
     subtype_differential = generate_differential(transcript_text)
@@ -506,7 +525,21 @@ def score_session(session_id: str):
         "binary_pred": binary_pred,
         "risk_flag": risk_flag,
         "modality_attributions": xai["modality_attributions"],
+        # Named prosodic measures driving this prediction, when the served
+        # acoustic features are the interpretable ones. Absent under wav2vec2,
+        # whose dimensions have no names to give.
+        "acoustic_drivers": xai.get("acoustic_drivers"),
         "narrative": narrative,
+        # Provenance: which model produced this, and where its decision fell.
+        # Without it a stored prediction cannot be traced to the weights that
+        # made it, and a later refit silently changes the meaning of old rows.
+        "model": {
+            "features": ACOUSTIC,
+            "input_dim": FUSION_INPUT_DIM,
+            "caseness_threshold": round(float(threshold), 3),
+            "trained": bool(getattr(_fusion_head, "meta", None)),
+            "fitted": (getattr(_fusion_head, "meta", {}) or {}).get("fitted"),
+        },
     }
     store.set("predictions", session_id, result)
     store.update("sessions", session_id, {"status": "scored"})

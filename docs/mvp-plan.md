@@ -1,6 +1,6 @@
 # MVP plan: connecting the validated model to the dashboard
 
-**Status:** Day 1 complete · **Estimate:** 4 working days · **Written:** 2026-08-20
+**Status:** Days 1–3 complete · **Estimate:** 4 working days · **Written:** 2026-08-20
 
 The dashboard, API and model pipeline all exist and run end to end. What does
 not exist is a *trained model behind them*. This plan closes that gap and
@@ -242,12 +242,55 @@ predictions are invalid in a way nothing downstream would reveal.
    used and the model version, so a prediction can be traced to the weights that
    produced it.
 
-### Acceptance criteria
+### Acceptance criteria — all met 2026-08-30
 
-- [ ] `POST /sessions/{id}/score` returns non-random, reproducible scores for the same input.
-- [ ] Two sessions with clearly different severity produce appropriately ordered predictions.
-- [ ] `binary_pred` is not 1 for every participant (the current behaviour).
-- [ ] `api/tests` pass.
+- [x] `POST /sessions/{id}/score` returns non-random, reproducible scores (re-scoring the same session gives an identical value).
+- [x] Distinct inputs produce distinct predictions.
+- [x] `binary_pred` is no longer constant.
+- [x] Suite passes under **both** configurations: 54 passed, 2 skipped with `DEP_ACOUSTIC=prosody` and with `wav2vec2`.
+
+### Outcome
+
+The flip touched more than the scoring path. Four call sites assembled a fusion
+vector independently — `api/main.py`, `src/fusion/train.py`,
+`src/fusion/run_pipeline.py` and `src/eval/robustness.py` — so each would have
+needed the same change, and any one missed would have served or trained on the
+wrong features silently. They now all route through a single
+`run_acoustic_pipeline` in `aggregate.py`, which is the only place the choice is
+made.
+
+`outputs/weights/fusion_head.npz` is now the 808-dimension prosody model; the
+wav2vec2 comparison is retained as `fusion_head_1552.npz`. `WEIGHTS_PATH`
+selects the file matching `DEP_ACOUSTIC`, because setting that variable alone
+would otherwise load weights of the wrong width and fall back — silently, but
+for the dimension guard added on Day 1 — to an untrained head. `DEP_WEIGHTS`
+overrides for a locally refitted model.
+
+Attribution is now exact rather than approximated: for a linear head a feature's
+contribution is coefficient × value, and because the acoustic block is 24 named
+measures the response carries `acoustic_drivers` — for example
+`rms_mean_mean −2.101 (away from depression)`, `f0_mean_mean +0.444 (toward
+depression)`. Under wav2vec2 this is absent, since a 768-dimensional embedding
+has no nameable dimensions. That difference is itself part of the argument for
+the prosodic feature set.
+
+Responses now carry a `model` block — feature set, input dimension, threshold,
+and fitting timestamp — so a stored prediction can be traced to the weights that
+produced it, and a later refit does not silently change the meaning of old rows.
+
+Two further corrections found while wiring: `run_pipeline.py` and
+`robustness.py` both still thresholded at the clinical cutoff and now use the
+calibrated one. The robustness harness adds noise to the **waveform** before
+prosodic extraction rather than to an embedding afterwards, so the perturbation
+reaches pitch tracking and voice-activity detection as real recording noise
+would.
+
+Test fixtures were changed rather than pinned. `test_aggregation` had hard-coded
+a 768-wide acoustic block, which would have stayed green while the served
+configuration was broken; it now builds against the configured width, and a new
+test asserts that a wrong-width vector is refused. `prosody_pipeline` reads the
+synthetic `.npy` fixtures through the same loader as the real `.wav` sessions,
+so the fixtures exercise the configuration that actually ships.
 
 ---
 

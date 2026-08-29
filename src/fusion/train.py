@@ -33,7 +33,8 @@ from src.pipelines.sync import build_segments
 from src.pipelines.text_pipeline import BertTextEncoder, run_text_pipeline
 from src.pipelines.audio_pipeline import Wav2Vec2AudioEncoder, run_audio_pipeline
 from src.pipelines.metadata_pipeline import run_metadata_pipeline
-from src.fusion.aggregate import build_participant_vector, FUSION_INPUT_DIM
+from src.fusion.aggregate import (build_participant_vector, FUSION_INPUT_DIM,
+                                  run_acoustic_pipeline)
 from src.fusion.model import (
     FusionHead, HIDDEN1, HIDDEN2, OUTPUT_DIM, PHQ9_RANGE, HAMD_RANGE, HAMD_CASENESS_THRESHOLD,
 )
@@ -62,7 +63,7 @@ def build_dataset(data_root, labels_path, cache_path=None, recache=False):
             print(f"[skip] pid={pid}: no segments")
             continue
         t = run_text_pipeline(segs, text_enc)
-        a = run_audio_pipeline(pid, segs, audio_enc, data_root=data_root)
+        a = run_acoustic_pipeline(pid, segs, audio_enc, data_root=data_root)
         m = run_metadata_pipeline(pid, data_root=data_root)
         X.append(build_participant_vector(t, a, m))
         Y.append([float(row["phq9_score"]), float(row["hamd_score"])])

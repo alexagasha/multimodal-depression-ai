@@ -29,7 +29,7 @@ from src.pipelines.audio_pipeline import (
     Wav2Vec2AudioEncoder, load_audio, resample_if_needed, slice_segment, TARGET_SR,
 )
 from src.pipelines.metadata_pipeline import run_metadata_pipeline
-from src.fusion.aggregate import build_participant_vector
+from src.fusion.aggregate import build_participant_vector, ACOUSTIC
 from src.fusion.model import FusionHead, HAMD_CASENESS_THRESHOLD
 from src.eval.metrics import compute_metrics
 
@@ -84,21 +84,38 @@ def _predict(pid, text_enc, audio_enc, model, data_root,
 
     audio, sr = load_audio(pid, data_root)
     audio = resample_if_needed(audio, sr)
-    audio_embs = []
-    for seg in segments:
-        clip = slice_segment(audio, TARGET_SR, seg["start"], seg["end"])
+
+    if ACOUSTIC == "prosody":
+        # Noise is added to the waveform before feature extraction, not to an
+        # embedding afterwards, so the perturbation reaches pitch tracking and
+        # voice-activity detection the way real recording noise would. Applied
+        # per segment, matching the wav2vec2 branch, so the two conditions differ
+        # only in the representation and not in how they are degraded.
+        from src.pipelines.prosody_pipeline import prosody_from_turns
+        degraded = audio.copy()
         if audio_snr_db is not None:
-            clip = add_audio_noise(clip, audio_snr_db, rng)
-        audio_embs.append(audio_enc.encode(clip))
+            for seg in segments:
+                a, b = int(seg["start"] * TARGET_SR), int(seg["end"] * TARGET_SR)
+                if a < len(degraded):
+                    degraded[a:b] = add_audio_noise(degraded[a:b], audio_snr_db, rng)
+        turns = [(s["start"], s["end"]) for s in segments]
+        acoustic = prosody_from_turns(degraded, turns, TARGET_SR)
+    else:
+        acoustic = []
+        for seg in segments:
+            clip = slice_segment(audio, TARGET_SR, seg["start"], seg["end"])
+            if audio_snr_db is not None:
+                clip = add_audio_noise(clip, audio_snr_db, rng)
+            acoustic.append(audio_enc.encode(clip))
 
     meta = run_metadata_pipeline(pid, data_root=data_root)
-    fvec = build_participant_vector(text_embs, audio_embs, meta)
+    fvec = build_participant_vector(text_embs, acoustic, meta)
     scores = model.forward(fvec)
     return {
         "participant_id": pid,
         "phq9_pred": round(float(scores["phq9"]), 3),
         "hamd_pred": round(float(scores["hamd"]), 3),
-        "binary_pred": int(scores["hamd"] >= HAMD_CASENESS_THRESHOLD),
+        "binary_pred": int(scores["hamd"] >= model.caseness_threshold),
     }
 
 

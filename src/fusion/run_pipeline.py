@@ -24,7 +24,7 @@ from src.pipelines.sync import build_segments, DATA_ROOT
 from src.pipelines.text_pipeline import BertTextEncoder, run_text_pipeline
 from src.pipelines.audio_pipeline import Wav2Vec2AudioEncoder, run_audio_pipeline
 from src.pipelines.metadata_pipeline import run_metadata_pipeline
-from src.fusion.aggregate import build_participant_vector
+from src.fusion.aggregate import build_participant_vector, run_acoustic_pipeline
 from src.fusion.model import FusionHead, HAMD_CASENESS_THRESHOLD
 from src.safety.risk_flag import flag_risk
 
@@ -45,12 +45,13 @@ def run_participant(pid, text_enc, audio_enc, fusion_head, data_root=DATA_ROOT,
         return None
 
     text_embs = run_text_pipeline(segments, text_enc)
-    audio_embs = run_audio_pipeline(pid, segments, audio_enc, data_root=data_root)
+    acoustic = run_acoustic_pipeline(pid, segments, audio_enc, data_root=data_root)
     metadata_vec = run_metadata_pipeline(pid, data_root=data_root)
 
-    fusion_vec = build_participant_vector(text_embs, audio_embs, metadata_vec)
+    fusion_vec = build_participant_vector(text_embs, acoustic, metadata_vec)
     scores = fusion_head.forward(fusion_vec)
-    binary_pred = int(scores["hamd"] >= HAMD_CASENESS_THRESHOLD)
+    # calibrated cut point when the head carries one; see model.LinearHead
+    binary_pred = int(scores["hamd"] >= fusion_head.caseness_threshold)
 
     result = {
         "participant_id": pid,

@@ -65,12 +65,30 @@ def test_metadata_pipeline():
 
 
 def test_aggregation():
-    from src.fusion.aggregate import build_participant_vector, FUSION_INPUT_DIM, METADATA_DIM
+    """Built against the configured acoustic representation, not a fixed 768.
+
+    Pinning this to wav2vec2 would leave it green while the served
+    configuration was broken, which is the opposite of what it is for."""
+    from src.fusion.aggregate import (build_participant_vector, FUSION_INPUT_DIM,
+                                      METADATA_DIM, ACOUSTIC, ACOUSTIC_DIM)
     text_embs = [np.random.randn(768).astype(np.float32) for _ in range(4)]
-    audio_embs = [np.random.randn(768).astype(np.float32) for _ in range(4)]
     meta_vec = np.random.randn(METADATA_DIM).astype(np.float32)
-    fvec = build_participant_vector(text_embs, audio_embs, meta_vec)
+    acoustic = (np.random.randn(ACOUSTIC_DIM).astype(np.float32) if ACOUSTIC == "prosody"
+                else [np.random.randn(ACOUSTIC_DIM).astype(np.float32) for _ in range(4)])
+    fvec = build_participant_vector(text_embs, acoustic, meta_vec)
     assert fvec.shape == (FUSION_INPUT_DIM,), f"Expected ({FUSION_INPUT_DIM},), got {fvec.shape}"
+
+
+def test_aggregation_rejects_wrong_acoustic_width():
+    """A vector of the wrong provenance must not be silently accepted."""
+    import pytest
+    from src.fusion.aggregate import (build_participant_vector, METADATA_DIM,
+                                      ACOUSTIC_DIM)
+    text_embs = [np.random.randn(768).astype(np.float32) for _ in range(2)]
+    meta_vec = np.random.randn(METADATA_DIM).astype(np.float32)
+    wrong = np.random.randn(ACOUSTIC_DIM + 7).astype(np.float32)
+    with pytest.raises(ValueError):
+        build_participant_vector(text_embs, wrong, meta_vec)
 
 
 def test_fusion_head():
