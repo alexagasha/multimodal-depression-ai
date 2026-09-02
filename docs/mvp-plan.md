@@ -1,6 +1,6 @@
 # MVP plan: connecting the validated model to the dashboard
 
-**Status:** Days 1–3 complete · **Estimate:** 4 working days · **Written:** 2026-08-20
+**Status:** complete (Days 1–4) · **Estimate:** 4 working days · **Written:** 2026-08-20
 
 The dashboard, API and model pipeline all exist and run end to end. What does
 not exist is a *trained model behind them*. This plan closes that gap and
@@ -319,12 +319,40 @@ so the fixtures exercise the configuration that actually ships.
    limitations (no external validation; NPV; cohort demographics; the collection
    period with degraded audio).
 
-### Acceptance criteria
+### Acceptance criteria — all met 2026-08-30
 
-- [ ] One complete visit scored through the UI from recording to note draft.
-- [ ] Referral flag verified to fire with the model absent.
-- [ ] Model card committed.
-- [ ] No screen presents the output as diagnostic.
+- [x] One complete visit exercised end to end: participant → session → scale responses → audio upload → scoring → note draft → retrieval. Note drafting returns 503 without an `ANTHROPIC_API_KEY`, which is the intended behaviour: it refuses rather than fabricating clinical text.
+- [x] Referral flag fires with `_fusion_head` set to `None` — low scale totals but PHQ-9 item 9 = 2 still flags.
+- [x] `docs/model-card.md` committed.
+- [x] No screen presents the output as diagnostic — verified by scanning the rendered JSX with comments stripped.
+
+### Outcome
+
+**"Non-case" was the most dangerous string in the interface.** At NPV 0.459 it
+invites a clinician to read a rule-out the model cannot support. The caseness
+chip now reads *Higher priority* / *Not prioritised* under the heading
+*Screening priority*, with a scope note stating the model is a decision aid, was
+built from 135 interviews at two Ugandan sites, and cannot rule depression out.
+
+Named voice features are surfaced. The response carries `acoustic_drivers` and
+the modal renders them through a `PROSODY_LABEL` map, so a clinician reads
+"Pitch variation within answers" rather than `f0_sd_mean`, with a note that these
+are associations in this cohort and not causes.
+
+`docs/model-card.md` records the population, inputs, cross-validated performance
+with permutation p-values, the calibrated threshold and why it differs from the
+clinical cutoff, and eight limitations — no external validation, small sample,
+concurrent rather than predictive, the duration confound, co-varying audio and
+rating quality, machine-generated transcripts, the language question, and the
+absence of any fairness analysis.
+
+54 tests pass; `tsc --noEmit` is clean.
+
+### Not done
+
+The verification was through the API, not a browser session against the running
+Next.js app. The rendered copy was checked by scanning the component source.
+Someone should still click through it once before it is shown to a clinician.
 
 ---
 

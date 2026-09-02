@@ -17,6 +17,37 @@ const MODALITY_LABEL: Record<string, string> = {
   metadata: "Metadata",
 };
 
+/** Plain-language names for the prosodic measures. The model reports feature
+ *  keys; a clinician should read "how much pitch varies", not "f0_sd_mean".
+ *  Suffixes: _mean is the average across the interview's answers, _sd is how
+ *  much it varied between them. */
+const PROSODY_LABEL: Record<string, string> = {
+  f0_mean_mean: "Average pitch",
+  f0_mean_sd: "Pitch varies between answers",
+  f0_sd_mean: "Pitch variation within answers",
+  f0_sd_sd: "Consistency of pitch variation",
+  f0_range_st_mean: "Pitch range (semitones)",
+  f0_range_st_sd: "Pitch range varies between answers",
+  rms_mean_mean: "Loudness",
+  rms_mean_sd: "Loudness varies between answers",
+  rms_sd_mean: "Loudness variation within answers",
+  rms_sd_sd: "Consistency of loudness variation",
+  db_range_mean: "Dynamic range",
+  db_range_sd: "Dynamic range varies between answers",
+  voiced_frac_mean: "Proportion of speech that is voiced",
+  voiced_frac_sd: "Voicing varies between answers",
+  speech_frac_mean: "Proportion of answer spent speaking",
+  speech_frac_sd: "Speaking proportion varies between answers",
+  n_pauses_per_s_mean: "Pause frequency",
+  n_pauses_per_s_sd: "Pause frequency varies between answers",
+  pause_frac_mean: "Proportion of answer spent pausing",
+  pause_frac_sd: "Pausing varies between answers",
+  mean_pause_mean: "Average pause length",
+  mean_pause_sd: "Pause length varies between answers",
+  longest_pause_mean: "Longest pause",
+  longest_pause_sd: "Longest pause varies between answers",
+};
+
 function ReviewSection({ visitId }: { visitId: string }) {
   const [review, setReview] = useState<Review | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -221,6 +252,10 @@ export default function ScoreModal({
               transition={{ delay: 0.5, duration: 0.3 }}
               className="flex flex-col items-center"
             >
+              {/* Deliberately NOT "Case"/"Non-case". At the calibrated operating
+                  point PPV is 0.93 but NPV is 0.46, so a negative is weak
+                  evidence — labelling it "Non-case" invites a clinician to read
+                  a rule-out that the model cannot support. */}
               <span
                 className={`rounded-full px-3 py-1.5 text-sm font-semibold ${
                   result.binary_pred
@@ -228,11 +263,22 @@ export default function ScoreModal({
                     : "bg-sage-100 text-sage-700"
                 }`}
               >
-                {result.binary_pred ? "Case" : "Non-case"}
+                {result.binary_pred ? "Higher priority" : "Not prioritised"}
               </span>
-              <span className="mt-2 text-sm font-medium text-sage-700">Caseness</span>
+              <span className="mt-2 text-sm font-medium text-sage-700">
+                Screening priority
+              </span>
             </motion.div>
           </div>
+
+          <p className="rounded-xl border border-sage-200 bg-sage-50 px-4 py-3 text-xs leading-relaxed text-sage-700">
+            <span className="font-semibold">Decision aid, not a diagnosis.</span>{" "}
+            Estimated from 135 interviews at two Ugandan sites and not yet validated
+            elsewhere. It supports deciding who to assess first and{" "}
+            <span className="font-semibold">cannot rule depression out</span> — when
+            it does not prioritise someone it is right fewer than half the time.
+            The clinician-administered scores and clinical judgement take precedence.
+          </p>
 
           <div>
             <h3 className="font-display text-sm font-semibold text-sage-800">Modality attribution</h3>
@@ -241,6 +287,32 @@ export default function ScoreModal({
                 <AttributionBar key={modality} modality={modality} score={score} index={i} />
               ))}
             </div>
+            {result.acoustic_drivers && result.acoustic_drivers.length > 0 && (
+              <div className="mt-3">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-sage-600">
+                  Voice features driving this estimate
+                </h4>
+                <ul className="mt-1.5 space-y-1">
+                  {result.acoustic_drivers.map((d) => (
+                    <li key={d.feature} className="flex items-baseline justify-between gap-3 text-xs">
+                      <span className="text-sage-700">{PROSODY_LABEL[d.feature] ?? d.feature}</span>
+                      <span
+                        className={
+                          d.contribution > 0 ? "shrink-0 text-clay-600" : "shrink-0 text-sage-600"
+                        }
+                      >
+                        {d.contribution > 0 ? "↑" : "↓"} {Math.abs(d.contribution).toFixed(2)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-1.5 text-[11px] leading-snug text-sage-500">
+                  Measured from the recording, not inferred from the words. These are
+                  associations in this cohort, not causes.
+                </p>
+              </div>
+            )}
+
             <div className="mt-2">
               <EvidenceQuotes data={result.evidence} />
             </div>

@@ -77,6 +77,12 @@ export interface EvidenceResult {
   quotes: string[];
 }
 
+export interface AcousticDriver {
+  feature: string;
+  contribution: number;
+  direction: string;
+}
+
 export interface ScoreResult {
   session_id: string;
   phq9_pred: number;
@@ -85,9 +91,25 @@ export interface ScoreResult {
    * estimate above — the AI runs as a second opinion, not a replacement. */
   phq9_clinician: number;
   hamd_clinician: number;
+  /** Screening priority, not a diagnosis. At the calibrated operating point
+   * positive predictive value is 0.93 but negative predictive value is only
+   * 0.46 — so a 0 here is weak evidence and must never be presented as
+   * ruling depression out. See docs/model-card.md. */
   binary_pred: number;
   risk_flag: boolean;
   modality_attributions: Record<string, number>;
+  /** Named prosodic measures driving this estimate. Present only when the
+   * served acoustic features are the interpretable ones; a self-supervised
+   * embedding has no nameable dimensions. */
+  acoustic_drivers?: AcousticDriver[] | null;
+  /** Which weights produced this, so a stored result stays traceable. */
+  model?: {
+    features: string;
+    input_dim: number;
+    caseness_threshold: number;
+    trained: boolean;
+    fitted: string | null;
+  };
   narrative: string;
   /** All four below are null when unavailable (no ANTHROPIC_API_KEY) —
    * deliberately no non-LLM fallback for any of these, see each module's
