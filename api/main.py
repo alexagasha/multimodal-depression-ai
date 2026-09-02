@@ -37,6 +37,8 @@ from src.pipelines.audio_pipeline import Wav2Vec2AudioEncoder, run_audio_pipelin
 from src.pipelines.metadata_pipeline import run_metadata_pipeline
 from src.pipelines.prosody_pipeline import run_prosody_pipeline
 from src.pipelines.asr_pipeline import build_asr, run_asr_pipeline, is_probably_silence
+from starlette.concurrency import run_in_threadpool
+
 from src.fusion.aggregate import build_participant_vector, FUSION_INPUT_DIM, ACOUSTIC
 from src.fusion.model import FusionHead, HAMD_CASENESS_THRESHOLD, load_head
 from src.xai.attribution import explain_participant
@@ -80,7 +82,10 @@ app.add_middleware(
 # Frozen encoders + fusion head, loaded once. Mock fallback if torch/transformers
 # aren't installed (see each module's docstring) — safe for local dev.
 _text_enc = BertTextEncoder()
-_audio_enc = Wav2Vec2AudioEncoder()
+# Only built when it is actually served. Under the default prosody
+# configuration this encoder is never called, and constructing it would pull
+# ~360 MB of weights at startup to sit unused.
+_audio_enc = Wav2Vec2AudioEncoder() if ACOUSTIC == "wav2vec2" else None
 _asr = build_asr()  # DEP_ASR_PROVIDER: local (default) | openai | groq | deepgram
 def _load_fusion_head():
     """Load trained weights, refusing any that do not match the served features.
@@ -307,7 +312,8 @@ async def upload_audio(session_id: str, file: UploadFile):
     with open(os.path.join(session_dir, f"{session_id}_AUDIO.meta.json"), "w") as f:
         json.dump({"sample_rate": sr, "duration_sec": duration_sec}, f)
 
-    transcript_rows = run_asr_pipeline(waveform, sr, _asr)
+    # Same reason as the chunked path: blocking work must not run on the loop.
+    transcript_rows = await run_in_threadpool(run_asr_pipeline, waveform, sr, _asr)
     _write_transcript_csv(
         os.path.join(session_dir, f"{session_id}_TRANSCRIPT.csv"), transcript_rows
     )
@@ -381,7 +387,12 @@ async def upload_audio_chunk(session_id: str, file: UploadFile):
     # Transcribing silence costs as much CPU as transcribing speech (and
     # invites hallucinated text), so skip quiet chunks outright — this is what
     # keeps live transcription comfortably ahead of realtime on CPU.
-    rows = [] if is_probably_silence(waveform) else run_asr_pipeline(waveform, sr, _asr)
+    # Transcription is CPU-bound and synchronous. Called directly inside an
+    # async handler it runs ON the event loop and blocks every other request —
+    # including /health — for as long as it takes, which looks like the whole
+    # server hanging rather than one slow upload. Offload it.
+    rows = ([] if is_probably_silence(waveform)
+            else await run_in_threadpool(run_asr_pipeline, waveform, sr, _asr))
     for row in rows:
         row["start_time"] = float(row["start_time"]) + offset
         row["stop_time"] = float(row["stop_time"]) + offset
@@ -393,7 +404,8 @@ async def upload_audio_chunk(session_id: str, file: UploadFile):
     text = _transcript_text(live["rows"])
     note_updated = False
     if len(text) - live["note_at_chars"] >= LIVE_NOTE_MIN_NEW_CHARS:
-        note = draft_live_note(text)
+        # Network call to an LLM — also blocking, also on the event loop.
+        note = await run_in_threadpool(draft_live_note, text)
         # Keep the previous draft on failure rather than blanking the panel.
         if note is not None:
             live["note"] = note
