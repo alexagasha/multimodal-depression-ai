@@ -7,6 +7,7 @@ import { api, ApiError, NoteDraft, ScoreResult, TranscriptRow, VisitSummary } fr
 import SessionStatusStepper from "@/components/SessionStatusStepper";
 import RiskBanner from "@/components/RiskBanner";
 import RiskAssessmentForm from "@/components/RiskAssessmentForm";
+import MSEPanel from "@/components/MSEPanel";
 import ScaleForm from "@/components/ScaleForm";
 import AudioRecorder from "@/components/AudioRecorder";
 import LiveTranscript from "@/components/LiveTranscript";
@@ -29,6 +30,7 @@ export default function VisitWorkspacePage() {
   const [liveNote, setLiveNote] = useState<NoteDraft | null>(null);
   const [riskAssessed, setRiskAssessed] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
+  const [objectiveFromMSE, setObjectiveFromMSE] = useState<string | null>(null);
 
   function refreshVisit() {
     api
@@ -185,10 +187,13 @@ export default function VisitWorkspacePage() {
         </p>
       )}
 
+      <MSEPanel visitId={id} onCopyToNote={setObjectiveFromMSE} />
+
       <NoteDraftPanel
         visitId={id}
         liveDraft={liveNote}
         recording={recording}
+        objectiveFromMSE={objectiveFromMSE}
         onSaved={() => setNotesRefreshKey((k) => k + 1)}
       />
 

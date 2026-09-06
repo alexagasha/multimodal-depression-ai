@@ -19,11 +19,15 @@ export default function NoteDraftPanel({
   visitId,
   liveDraft,
   recording,
+  objectiveFromMSE,
   onSaved,
 }: {
   visitId: string;
   liveDraft: NoteDraft | null;
   recording: boolean;
+  /** A completed mental status examination, pushed in from MSEPanel. Replaces
+   * the Objective section, which is what the MSE is the structure for. */
+  objectiveFromMSE?: string | null;
   onSaved: () => void;
 }) {
   const [draft, setDraft] = useState<NoteDraft | null>(null);
@@ -46,6 +50,22 @@ export default function NoteDraftPanel({
     if (liveDraft && !edited) {
       setDraft(liveDraft);
       setOrigin(liveDraft);
+    }
+  }
+
+  // Same adjust-during-render pattern for the MSE hand-off. Counts as an edit:
+  // the clinician assembled that examination, so live redrafts must stop
+  // overwriting the section it went into.
+  const [prevMSE, setPrevMSE] = useState(objectiveFromMSE);
+  if (objectiveFromMSE !== prevMSE) {
+    setPrevMSE(objectiveFromMSE);
+    if (objectiveFromMSE) {
+      setEdited(true);
+      setDraft((d) =>
+        d
+          ? { ...d, objective: objectiveFromMSE }
+          : { subjective: "", objective: objectiveFromMSE, assessment: "", plan: "" },
+      );
     }
   }
 

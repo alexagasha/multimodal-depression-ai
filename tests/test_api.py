@@ -284,6 +284,49 @@ def test_empty_and_mislabelled_notes_are_rejected(client):
                               "source": "invented"}).status_code == 422
 
 
+def test_mse_returns_all_ten_domains_and_admits_what_it_cannot_see(client):
+    """An MSE that quietly invented an appearance finding would be worse than
+    no MSE, because it would look complete."""
+    _, session_id = _run_full_session(client)
+
+    r = client.post(f"/sessions/{session_id}/mse")
+    assert r.status_code == 200
+    domains = {d["domain"]: d for d in r.json()["domains"]}
+    assert len(domains) == 11  # ten MSE domains, insight and judgement counted together
+
+    for key in ("appearance", "behaviour", "attitude"):
+        assert domains[key]["source"] == "not_observable"
+        assert domains[key]["finding"] is None
+        assert "not observable" in domains[key]["note"].lower()
+
+    # Speech is measured, not inferred, and asserts no normal range.
+    speech = domains["speech"]
+    assert speech["source"] == "measured"
+    assert speech["measures"], "speech domain should carry prosodic measurements"
+    assert all("label" in m and "value" in m for m in speech["measures"])
+    assert "no reference range" in speech["note"].lower()
+
+
+def test_mse_scaffold_survives_having_no_llm(client, monkeypatch):
+    """A blank domain the clinician can see and fill is useful; a silently
+    absent one is not."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _, session_id = _run_full_session(client)
+
+    r = client.post(f"/sessions/{session_id}/mse")
+    assert r.status_code == 200
+    domains = {d["domain"]: d for d in r.json()["domains"]}
+    assert len(domains) == 11
+    assert domains["mood"]["finding"] is None
+    assert domains["thought_content"]["finding"] is None
+    # the measured domain does not depend on the LLM at all
+    assert domains["speech"]["measures"]
+
+
+def test_mse_unknown_session_404s(client):
+    assert client.post("/sessions/doesnotexist/mse").status_code == 404
+
+
 def _risk_body(**over):
     body = {
         "assessor": "Dr. Nabirye", "assessor_role": "psychiatrist",

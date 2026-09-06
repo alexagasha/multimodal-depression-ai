@@ -258,6 +258,30 @@ export interface ClinicalNote {
   provenance: NoteProvenance;
 }
 
+/** Where a mental-status domain's content could come from — and therefore how
+ * far to trust it. `not_observable` means audio cannot support the domain at
+ * all; it stays the clinician's to observe. See api/mse.py. */
+export type MSESource = "not_observable" | "measured" | "transcript";
+
+export interface MSEMeasure {
+  label: string;
+  value: number;
+  unit: string;
+}
+
+export interface MSEDomain {
+  domain: string;
+  label: string;
+  source: MSESource;
+  finding: string | null;
+  measures: MSEMeasure[] | null;
+  note: string | null;
+}
+
+export interface MSEResult {
+  domains: MSEDomain[];
+}
+
 export type Ideation = "none" | "passive" | "active";
 
 export type Disposition =
@@ -380,6 +404,9 @@ export const api = {
 
   listNotes: (visitId: string) =>
     request<ClinicalNote[]>(`/sessions/${visitId}/notes`),
+
+  getMSE: (visitId: string) =>
+    request<MSEResult>(`/sessions/${visitId}/mse`, { method: "POST" }),
 
   addRiskAssessment: (visitId: string, body: RiskAssessmentIn) =>
     request<RiskAssessment>(`/sessions/${visitId}/risk-assessment`, {

@@ -53,6 +53,7 @@ from api.treatment_suggestions import generate_suggestions
 from api.patient_summary import generate_patient_summary
 from api.note_draft import draft_note
 from api.risk_assessment import IDEATION_LEVELS, DISPOSITIONS, find_risk_quotes
+from api.mse import build_mse
 from api.live_note import draft_live_note
 from api.caseload_query import answer_query
 from api.analytics_summary import generate_analytics_narrative
@@ -889,6 +890,30 @@ def add_clinical_note(session_id: str, body: ClinicalNoteIn):
 def get_clinical_notes(session_id: str):
     _require_session(session_id)
     return store.get("clinical_notes", session_id) or []
+
+
+@app.post("/sessions/{session_id}/mse")
+def get_mse(session_id: str):
+    """Mental status examination scaffold for the Objective section.
+
+    Always returns all ten domains. Three of them are marked not observable
+    from audio and stay the clinician's to fill; speech is populated from the
+    measured prosodic features rather than from the LLM. See api/mse.py —
+    the honesty of the blanks is the point of the endpoint.
+    """
+    _require_session(session_id)
+    segments = build_segments(session_id, data_root=LIVE_DATA_ROOT)
+    transcript_text = " ".join(seg["text"] for seg in segments if seg.get("text"))
+
+    prosody_vector = None
+    try:
+        prosody_vector = run_prosody_pipeline(session_id, data_root=LIVE_DATA_ROOT)
+    except Exception as e:
+        # No audio, wrong sample rate, unreadable turns — the scaffold is
+        # still worth returning without the speech measures.
+        print(f"[mse] prosody unavailable ({type(e).__name__}); speech domain left blank.")
+
+    return build_mse(transcript_text, prosody_vector)
 
 
 @app.post("/sessions/{session_id}/risk-quotes")
