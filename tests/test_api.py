@@ -307,6 +307,24 @@ def test_mse_returns_all_ten_domains_and_admits_what_it_cannot_see(client):
     assert "no reference range" in speech["note"].lower()
 
 
+def test_unmeasurable_speech_is_reported_as_absent_not_as_zero():
+    """An all-zero prosody vector means no turn was measurable. Rendering it
+    as "mean pitch 0 Hz" would present an absence of measurement AS a
+    measurement — the exact failure this module exists to avoid."""
+    from api.mse import build_mse
+    from src.pipelines.prosody_pipeline import FEATURE_NAMES
+
+    result = build_mse("", [0.0] * len(FEATURE_NAMES))
+    speech = next(d for d in result["domains"] if d["domain"] == "speech")
+    assert speech["measures"] is None
+    assert "no speech was measurable" in speech["note"].lower()
+
+    # a vector with real values still reports them
+    result = build_mse("", [0.0] * (len(FEATURE_NAMES) - 1) + [1.5])
+    speech = next(d for d in result["domains"] if d["domain"] == "speech")
+    assert speech["measures"]
+
+
 def test_mse_scaffold_survives_having_no_llm(client, monkeypatch):
     """A blank domain the clinician can see and fill is useful; a silently
     absent one is not."""

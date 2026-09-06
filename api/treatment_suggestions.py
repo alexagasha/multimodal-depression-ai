@@ -1,12 +1,27 @@
 """
 Guideline-grounded next-step suggestions: paraphrased, non-proprietary
-clinical heuristics (informed by general treatment-resistant-depression
-stepped-care sequencing in the style of STAR*D, and DSM-5 subtype-treatment
-matching), NOT a retrieval system over the actual copyrighted guidelines.
-Same inlined-static-context approach as api/subtype_differential.py's DSM-5
-criteria, scoped to one feature rather than full RAG infrastructure — see
-docs/system-roadmap.md Phase 5 for where this graduates to real retrieval
-if the corpus grows.
+clinical heuristics, NOT a retrieval system over the actual copyrighted
+guidelines. Same inlined-static-context approach as
+api/subtype_differential.py's DSM-5 criteria, scoped to one feature rather
+than full RAG infrastructure — see docs/system-roadmap.md Phase 5 for where
+this graduates to real retrieval if the corpus grows.
+
+ORDERED TO MATCH THE SETTING, NOT THE LITERATURE'S CENTRE OF GRAVITY.
+
+These heuristics used to lead with STAR*D-style stepped care: switching within
+and across antidepressant class, augmentation strategies, TCA-versus-SSRI
+subtleties. That is US tertiary-care sequencing, and it is the wrong first
+frame for Butabika and Lira, where staff are trained against WHO's mhGAP
+Intervention Guide and the Uganda Clinical Guidelines
+(docs/clinical-documentation-plan.md 1.6). mhGAP puts psychoeducation,
+addressing current psychosocial stressors, reactivating social supports and
+structured activity ahead of medication for milder presentations, and works
+from a much narrower formulary than the literature assumes.
+
+The subtype-specific considerations are kept, moved below the mhGAP-aligned
+sequence, because they are still useful to a specialist reading them — they
+just should not be the first thing suggested to a clinical officer in a
+district facility.
 
 Always advisory, always phrased as "consider"/"may warrant" — never a
 directive or prescription. Explanatory only: this module NEVER feeds back
@@ -17,6 +32,30 @@ import json
 from api.llm_utils import call_claude
 
 TREATMENT_HEURISTICS = """
+FIRST-LINE, IN THE ORDER A DISTRICT-LEVEL SERVICE WOULD WORK THROUGH THEM \
+(mhGAP-IG depression module / Uganda Clinical Guidelines):
+- Psychoeducation for the patient, and where they consent, for a family member: that \
+depression is a common and treatable condition, not a personal failing or a spiritual one.
+- Identify and address current psychosocial stressors — housing, income, bereavement, \
+violence, caregiving burden, stigma. These are often the most modifiable thing available.
+- Reactivate social supports and previously enjoyed activities; structured physical \
+activity and a regular sleep routine.
+- Mild presentations: the above alone is an adequate first step. Antidepressants are not \
+routinely indicated as the opening move, and starting one before psychosocial \
+intervention has been tried is a common over-treatment.
+- Moderate-to-severe presentations, or inadequate response to the above: consider an \
+antidepressant, working within the facility's actual formulary — in Uganda that is \
+typically fluoxetine or amitriptyline rather than the wider range the literature assumes.
+- Review at 4-6 weeks at an adequate dose before concluding a trial has failed, and \
+follow up more often than that early on.
+- Screen for a history of mania before starting an antidepressant; also consider \
+concurrent alcohol or substance use, and treatable physical causes (anaemia, thyroid \
+disease, HIV, medication side effects).
+- Refer to specialist or district mental health services for psychotic features, high \
+suicide risk, pregnancy or breastfeeding, adolescents, or non-response after adequate \
+trials.
+
+FURTHER SUBTYPE CONSIDERATIONS, where a specialist is involved:
 - First depressive episode, mild-moderate severity: first-line SSRI or structured \
 psychotherapy (CBT/IPT) are both reasonable; patient preference matters.
 - Melancholic features present: pharmacotherapy tends to be favored over psychotherapy \
@@ -38,7 +77,9 @@ PROMPT_TEMPLATE = """You are assisting a psychiatrist with next-step treatment c
 This is advisory decision support only — never phrase anything as a directive or prescription; \
 always use "consider" / "may warrant" / "worth discussing."
 
-General heuristics to draw from (not a substitute for full clinical guidelines):
+General heuristics to draw from (not a substitute for full clinical guidelines). The setting \
+is a Ugandan mental health service, so prefer the first-line sequence over the specialist \
+considerations unless this patient's data calls for the latter:
 {heuristics}
 
 This patient's screening data:

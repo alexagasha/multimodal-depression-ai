@@ -103,7 +103,18 @@ def _speech_domain(prosody_vector) -> dict:
     if prosody_vector is None or len(prosody_vector) != len(FEATURE_NAMES):
         return {"finding": None, "measures": None,
                 "note": "Speech measures unavailable for this recording."}
+
     values = dict(zip(FEATURE_NAMES, (float(v) for v in prosody_vector)))
+    # An all-zero vector means no turn was long enough to measure — usually an
+    # empty transcript. Rendering that as "mean pitch 0 Hz" would present an
+    # absence of measurement as a measurement, which is the specific failure
+    # this module exists to avoid. Real speech cannot be simultaneously 0 Hz
+    # and 0% voiced, so the test is unambiguous.
+    if not any(values.values()):
+        return {"finding": None, "measures": None,
+                "note": "No speech was measurable in this recording — the transcript has no "
+                        "turns long enough to analyse. Nothing is being reported as zero."}
+
     measures = [
         {"label": label, "value": round(values[key], 3), "unit": unit}
         for key, label, unit in SPEECH_MEASURES

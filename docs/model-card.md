@@ -168,6 +168,36 @@ English has not been separately assessed.
 has been performed. At this sample size such analyses would not be informative,
 but their absence means unequal performance across groups cannot be excluded.
 
+## What the recording can and cannot support clinically
+
+The input is participant audio only — no video, no clinician observation, no
+diarized interviewer turns. Measured against the ten domains of a mental status
+examination, that draws a hard boundary on what any model built on this data
+can contribute, independent of how well it performs:
+
+| MSE domain | Supportable from this input? |
+|---|---|
+| Appearance | **No** — requires visual observation |
+| Behaviour / motor activity | **No** — partially inferable from speech at best |
+| Attitude toward examiner | **No** |
+| Speech | **Yes, by measurement** — the 24 prosodic features |
+| Mood | Yes — the participant's own words |
+| Affect | Partial — voice quality only, never facial |
+| Thought process | Yes — from the transcript |
+| Thought content | Yes — from the transcript |
+| Perception | Partial — only if volunteered |
+| Insight and judgement | Partial |
+| Cognition | Partial — the instrument includes no formal testing |
+
+Speech is the one domain the system fills with measurement rather than
+inference, and **no normal range is asserted for it**: this cohort has no
+published reference distribution, so the measured values are reported for the
+clinician to interpret rather than labelled "slowed" or "reduced".
+
+`api/mse.py` implements this table directly, returning the three unsupportable
+domains as explicitly not observable rather than filling them. The reasoning is
+in `docs/clinical-documentation-plan.md` §1.3.
+
 ## Safety
 
 The suicide referral flag is **rule-based and independent of this model**. It is
