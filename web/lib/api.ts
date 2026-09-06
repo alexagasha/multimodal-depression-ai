@@ -258,6 +258,41 @@ export interface ClinicalNote {
   provenance: NoteProvenance;
 }
 
+export type Ideation = "none" | "passive" | "active";
+
+export type Disposition =
+  | "routine_follow_up"
+  | "urgent_follow_up"
+  | "referral"
+  | "same_day_referral"
+  | "admission";
+
+/** A completed suicide-risk assessment. Every field is the clinician's —
+ * nothing here is model-filled. See api/risk_assessment.py. */
+export interface RiskAssessmentIn {
+  assessor: string;
+  assessor_role?: string | null;
+  ideation: Ideation;
+  intent: boolean;
+  plan: boolean;
+  plan_description?: string | null;
+  means_access: boolean;
+  means_description?: string | null;
+  prior_attempts: boolean;
+  prior_attempts_description?: string | null;
+  protective_factors: string[];
+  verbatim_quotes: string[];
+  safety_plan?: string | null;
+  disposition: Disposition;
+  clinical_reasoning: string;
+}
+
+export interface RiskAssessment extends RiskAssessmentIn {
+  assessment_id: string;
+  session_id: string;
+  assessed_at: string;
+}
+
 export interface ReviewIn {
   reviewer: string;
   agrees: boolean;
@@ -345,6 +380,25 @@ export const api = {
 
   listNotes: (visitId: string) =>
     request<ClinicalNote[]>(`/sessions/${visitId}/notes`),
+
+  addRiskAssessment: (visitId: string, body: RiskAssessmentIn) =>
+    request<RiskAssessment>(`/sessions/${visitId}/risk-assessment`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  listRiskAssessments: (visitId: string) =>
+    request<RiskAssessment[]>(`/sessions/${visitId}/risk-assessment`),
+
+  /** Verbatim transcript lines the clinician may want to quote. Suggestions
+   * only — an empty list is a normal result, not a failure. */
+  getRiskQuotes: (visitId: string) =>
+    request<{ quotes: string[] }>(`/sessions/${visitId}/risk-quotes`, { method: "POST" }),
+
+  closeVisit: (visitId: string) =>
+    request<{ session_id: string; status: string }>(`/sessions/${visitId}/close`, {
+      method: "POST",
+    }),
 
   submitReview: (visitId: string, body: ReviewIn) =>
     request<Review>(`/sessions/${visitId}/review`, {

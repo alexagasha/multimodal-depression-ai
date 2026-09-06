@@ -52,6 +52,7 @@ from api.evidence import generate_evidence
 from api.treatment_suggestions import generate_suggestions
 from api.patient_summary import generate_patient_summary
 from api.note_draft import draft_note
+from api.risk_assessment import IDEATION_LEVELS, DISPOSITIONS, find_risk_quotes
 from api.live_note import draft_live_note
 from api.caseload_query import answer_query
 from api.analytics_summary import generate_analytics_narrative
@@ -195,6 +196,39 @@ class ClinicalNoteIn(BaseModel):
         if not has_soap and not (self.note_text or "").strip():
             raise HTTPException(422, "note must have either note_text or at least one SOAP field")
         return self
+
+
+class RiskAssessmentIn(BaseModel):
+    """The record of a suicide-risk assessment actually being done.
+
+    Every field here is the clinician's. api/risk_assessment.py may suggest
+    verbatim transcript quotes to paste into `verbatim_quotes`; nothing in
+    this model is ever model-filled. See that module's docstring.
+    """
+
+    assessor: str
+    assessor_role: Optional[str] = None
+
+    ideation: str  # none | passive | active
+    intent: bool
+    plan: bool
+    plan_description: Optional[str] = None
+    means_access: bool
+    means_description: Optional[str] = None
+    prior_attempts: bool
+    prior_attempts_description: Optional[str] = None
+
+    # Recorded as its own field because a risk note that lists only risk is an
+    # incomplete assessment — protective factors are what the disposition is
+    # weighed against.
+    protective_factors: list[str] = []
+    verbatim_quotes: list[str] = []
+
+    safety_plan: Optional[str] = None
+    disposition: str
+    # The most load-bearing field in the record: why this disposition, naming
+    # the specific factors behind it.
+    clinical_reasoning: str
 
 
 class TreatmentEventIn(BaseModel):
@@ -855,6 +889,78 @@ def add_clinical_note(session_id: str, body: ClinicalNoteIn):
 def get_clinical_notes(session_id: str):
     _require_session(session_id)
     return store.get("clinical_notes", session_id) or []
+
+
+@app.post("/sessions/{session_id}/risk-quotes")
+def get_risk_quotes(session_id: str):
+    """Verbatim transcript lines the clinician may want to quote in the risk
+    record. Suggestions only — see api/risk_assessment.py. Returns an empty
+    list rather than erroring when there is no LLM, because the risk form must
+    never depend on one."""
+    _require_session(session_id)
+    segments = build_segments(session_id, data_root=LIVE_DATA_ROOT)
+    transcript_text = " ".join(seg["text"] for seg in segments if seg.get("text"))
+    return {"quotes": find_risk_quotes(transcript_text)}
+
+
+@app.post("/sessions/{session_id}/risk-assessment")
+def add_risk_assessment(session_id: str, body: RiskAssessmentIn):
+    """Record a completed suicide-risk assessment.
+
+    Like clinical notes, append-only: a reassessment is a new entry, since
+    documenting risk again at each contact is the expectation even when
+    nothing has changed.
+    """
+    _require_session(session_id)
+    if body.ideation not in IDEATION_LEVELS:
+        raise HTTPException(422, f"ideation must be one of {IDEATION_LEVELS}")
+    if body.disposition not in DISPOSITIONS:
+        raise HTTPException(422, f"disposition must be one of {DISPOSITIONS}")
+    if not body.clinical_reasoning.strip():
+        raise HTTPException(422, "clinical_reasoning is required — a disposition without a "
+                                 "stated rationale is the part that cannot be defended later")
+
+    entry = {
+        **body.model_dump(),
+        "assessment_id": uuid.uuid4().hex[:10],
+        "session_id": session_id,
+        "assessed_at": _now_iso(),
+    }
+    existing = store.get("risk_assessments", session_id) or []
+    existing.append(entry)
+    store.set("risk_assessments", session_id, existing)
+    return entry
+
+
+@app.get("/sessions/{session_id}/risk-assessment")
+def get_risk_assessments(session_id: str):
+    _require_session(session_id)
+    return store.get("risk_assessments", session_id) or []
+
+
+@app.post("/sessions/{session_id}/close")
+def close_session(session_id: str):
+    """Close a visit.
+
+    This is the gate the referral flag never had. Until now the banner fired
+    and the visit could be left exactly as it was, with nothing recorded about
+    what the clinician found or decided. A flagged visit cannot be closed
+    without a risk assessment on file.
+
+    The check is on the flag, not on the model's prediction — same boundary
+    src/safety/risk_flag.py draws. An untrained or unavailable model must not
+    be able to open this gate.
+    """
+    session = _require_session(session_id)
+    if session.get("risk_flag") and not store.get("risk_assessments", session_id):
+        raise HTTPException(
+            409,
+            "This visit is referral-flagged (PHQ-9 item 9 / HAM-D suicide domain). "
+            "Record a risk assessment before closing it — "
+            "POST /sessions/{id}/risk-assessment.",
+        )
+    store.update("sessions", session_id, {"status": "closed", "closed_at": _now_iso()})
+    return {"session_id": session_id, "status": "closed"}
 
 
 @app.post("/sessions/{session_id}/review")

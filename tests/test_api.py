@@ -284,6 +284,83 @@ def test_empty_and_mislabelled_notes_are_rejected(client):
                               "source": "invented"}).status_code == 422
 
 
+def _risk_body(**over):
+    body = {
+        "assessor": "Dr. Nabirye", "assessor_role": "psychiatrist",
+        "ideation": "passive", "intent": False, "plan": False,
+        "means_access": False, "prior_attempts": False,
+        "protective_factors": ["Two young children", "Attends church weekly"],
+        "verbatim_quotes": ["sometimes I feel like it would be easier not to wake up"],
+        "safety_plan": "Sister to stay with her; clinic contact number given.",
+        "disposition": "urgent_follow_up",
+        "clinical_reasoning": "Passive ideation without intent, plan or means. Strong "
+                              "family support and childcare responsibilities. Reviewed in "
+                              "one week rather than referred.",
+    }
+    body.update(over)
+    return body
+
+
+def test_risk_assessment_is_recorded_and_append_only(client):
+    _, session_id = _run_full_session(client)
+
+    r = client.post(f"/sessions/{session_id}/risk-assessment", json=_risk_body())
+    assert r.status_code == 200
+    entry = r.json()
+    assert entry["ideation"] == "passive"
+    assert entry["protective_factors"] == ["Two young children", "Attends church weekly"]
+    assert entry["assessed_at"]
+
+    # reassessment appends rather than replacing — documenting risk again at
+    # each contact is expected even when nothing changed
+    client.post(f"/sessions/{session_id}/risk-assessment",
+                json=_risk_body(ideation="none", disposition="routine_follow_up"))
+    entries = client.get(f"/sessions/{session_id}/risk-assessment").json()
+    assert len(entries) == 2
+    assert entries[0]["ideation"] == "passive"
+
+
+def test_risk_assessment_rejects_missing_reasoning_and_bad_vocabulary(client):
+    _, session_id = _run_full_session(client)
+
+    assert client.post(f"/sessions/{session_id}/risk-assessment",
+                       json=_risk_body(clinical_reasoning="   ")).status_code == 422
+    assert client.post(f"/sessions/{session_id}/risk-assessment",
+                       json=_risk_body(ideation="a bit")).status_code == 422
+    assert client.post(f"/sessions/{session_id}/risk-assessment",
+                       json=_risk_body(disposition="sent home")).status_code == 422
+
+
+def test_flagged_visit_cannot_be_closed_without_a_risk_assessment(client):
+    """The gate the referral banner never had."""
+    _, session_id = _run_full_session(client, phq9_item9=2, hamd_suicide_item=3)
+    assert client.get(f"/sessions/{session_id}").json()["risk_flag"] is True
+
+    blocked = client.post(f"/sessions/{session_id}/close")
+    assert blocked.status_code == 409
+    assert "risk assessment" in blocked.json()["detail"].lower()
+
+    client.post(f"/sessions/{session_id}/risk-assessment", json=_risk_body())
+    ok = client.post(f"/sessions/{session_id}/close")
+    assert ok.status_code == 200
+    assert client.get(f"/sessions/{session_id}").json()["status"] == "closed"
+
+
+def test_unflagged_visit_closes_freely(client):
+    _, session_id = _run_full_session(client, phq9_item9=0, hamd_suicide_item=0)
+    assert client.get(f"/sessions/{session_id}").json()["risk_flag"] is False
+    assert client.post(f"/sessions/{session_id}/close").status_code == 200
+
+
+def test_risk_quotes_degrade_to_empty_without_an_llm(client, monkeypatch):
+    """The risk form must never depend on a model being available."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _, session_id = _run_full_session(client)
+    r = client.post(f"/sessions/{session_id}/risk-quotes")
+    assert r.status_code == 200
+    assert r.json()["quotes"] == []
+
+
 def test_review_workflow(client):
     _, session_id = _run_full_session(client)
 
