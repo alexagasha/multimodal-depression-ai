@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { api, ApiError, NoteDraft } from "@/lib/api";
-import { Field, TextArea, TextInput, Card } from "@/components/FormField";
+import { AUTHOR_ROLES } from "@/lib/clinical";
+import { Field, TextArea, TextInput, Select, Card } from "@/components/FormField";
 
 const SOAP_FIELDS = ["subjective", "objective", "assessment", "plan"] as const;
 
@@ -26,8 +27,13 @@ export default function NoteDraftPanel({
   onSaved: () => void;
 }) {
   const [draft, setDraft] = useState<NoteDraft | null>(null);
+  /** The draft exactly as the server last produced it. Kept alongside the
+   * editable copy so saving can report which sections the clinician actually
+   * changed, rather than labelling every AI-drafted note the same way. */
+  const [origin, setOrigin] = useState<NoteDraft | null>(null);
   const [edited, setEdited] = useState(false);
   const [author, setAuthor] = useState("");
+  const [role, setRole] = useState("psychiatrist");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [prevLiveDraft, setPrevLiveDraft] = useState<NoteDraft | null>(liveDraft);
@@ -37,7 +43,10 @@ export default function NoteDraftPanel({
   // would cascade an extra render on every redraft.
   if (liveDraft !== prevLiveDraft) {
     setPrevLiveDraft(liveDraft);
-    if (liveDraft && !edited) setDraft(liveDraft);
+    if (liveDraft && !edited) {
+      setDraft(liveDraft);
+      setOrigin(liveDraft);
+    }
   }
 
   async function saveAsNote() {
@@ -45,11 +54,24 @@ export default function NoteDraftPanel({
     setSaving(true);
     setError(null);
     try {
-      const note_text =
-        `S: ${draft.subjective}\nO: ${draft.objective}\n` +
-        `A: ${draft.assessment}\nP: ${draft.plan}`;
-      await api.addNote(visitId, author.trim(), note_text);
+      // Send the four fields as fields. Flattening them into one string here
+      // was throwing away structure the model had already produced.
+      const changed = SOAP_FIELDS.filter((f) => draft[f] !== origin?.[f]);
+      await api.addNote(visitId, {
+        author: author.trim(),
+        author_role: role,
+        note_type: "progress",
+        subjective: draft.subjective,
+        objective: draft.objective,
+        assessment: draft.assessment,
+        plan: draft.plan,
+        source: changed.length ? "ai_draft_edited" : "ai_draft_accepted",
+        ai_model: origin?.ai_model ?? null,
+        draft_generated_at: origin?.generated_at ?? null,
+        edited_fields: changed,
+      });
       setDraft(null);
+      setOrigin(null);
       setEdited(false);
       onSaved();
     } catch (e) {
@@ -118,13 +140,28 @@ export default function NoteDraftPanel({
               Live updates paused — your edits won&apos;t be overwritten.
             </p>
           )}
-          <Field label="Author">
-            <TextInput
-              value={author}
-              onChange={(e) => setAuthor(e.target.value)}
-              placeholder="Dr. …"
-            />
-          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Author">
+              <TextInput
+                value={author}
+                onChange={(e) => setAuthor(e.target.value)}
+                placeholder="Dr. …"
+              />
+            </Field>
+            <Field label="Role">
+              <Select value={role} onChange={(e) => setRole(e.target.value)}>
+                {AUTHOR_ROLES.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <p className="text-xs text-sage-600">
+            Saving signs this note in your name. The record will show it was AI-drafted and
+            which sections you changed.
+          </p>
           <div className="flex gap-2">
             <button
               type="button"

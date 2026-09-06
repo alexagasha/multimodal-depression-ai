@@ -9,8 +9,14 @@ parsing/validation — this only owns the network call.
 """
 import os
 
+# The model every GenAI module calls unless it overrides. Named here rather
+# than only as a default argument so note provenance can record *which* model
+# drafted a note without guessing (see docs/clinical-documentation-plan.md
+# §1.5: AI-drafted clinical text must be attributable).
+DEFAULT_MODEL = "claude-sonnet-5"
 
-def call_claude(prompt: str, max_tokens: int = 500, model: str = "claude-sonnet-5") -> str | None:
+
+def call_claude(prompt: str, max_tokens: int = 500, model: str = DEFAULT_MODEL) -> str | None:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return None

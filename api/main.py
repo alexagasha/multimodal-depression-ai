@@ -44,6 +44,7 @@ from src.fusion.model import FusionHead, HAMD_CASENESS_THRESHOLD, load_head
 from src.xai.attribution import explain_participant
 from src.safety.risk_flag import flag_risk
 from api.storage import store
+from api.llm_utils import DEFAULT_MODEL
 from api.genui import generate_narrative
 from api.subtype_differential import generate_differential
 from api.trends import relapse_warning, risk_trajectory
@@ -140,9 +141,60 @@ class ScaleResponsesIn(BaseModel):
     hamd_suicide_item: int
 
 
+NOTE_TYPES = ("initial_evaluation", "progress", "risk_assessment", "addendum")
+NOTE_SOURCES = ("clinician", "ai_draft_edited", "ai_draft_accepted")
+SOAP_FIELDS = ("subjective", "objective", "assessment", "plan")
+
+
 class ClinicalNoteIn(BaseModel):
+    """A clinical note, SOAP-structured where the clinician used the structured
+    form and free text where they did not.
+
+    Both shapes are accepted deliberately. `note_text` alone is a free-text
+    note or addendum; the four SOAP fields are a structured note. Until now
+    only the free-text shape existed, so the frontend flattened the AI draft's
+    four fields into one string before POSTing — the structure was generated
+    and then thrown away at this boundary. See
+    docs/clinical-documentation-plan.md §2.
+
+    The provenance fields exist because a note drafted by a model and a note
+    written by a clinician must not be indistinguishable once saved (§1.5).
+    They are recorded, never enforced: the clinician remains the author of
+    record regardless of what drafted the text.
+    """
+
     author: str
-    note_text: str
+    author_role: Optional[str] = None
+    note_type: str = "progress"
+
+    note_text: Optional[str] = None
+    subjective: Optional[str] = None
+    objective: Optional[str] = None
+    assessment: Optional[str] = None
+    plan: Optional[str] = None
+
+    # Append-only means a correction is a new note, not an edit. `amends`
+    # links it to the note it corrects so the chain stays readable.
+    amends: Optional[str] = None
+
+    source: str = "clinician"
+    # When the draft the clinician was shown was produced. The gap between
+    # this and the save is the review duration — surfaced, not blocked on.
+    draft_generated_at: Optional[str] = None
+    ai_model: Optional[str] = None
+    # Which SOAP fields the clinician changed from the draft they were shown.
+    edited_fields: Optional[list[str]] = None
+
+    def validated(self) -> "ClinicalNoteIn":
+        """Reject shapes that would produce an empty or mislabelled record."""
+        if self.note_type not in NOTE_TYPES:
+            raise HTTPException(422, f"note_type must be one of {NOTE_TYPES}")
+        if self.source not in NOTE_SOURCES:
+            raise HTTPException(422, f"source must be one of {NOTE_SOURCES}")
+        has_soap = any(getattr(self, f) for f in SOAP_FIELDS)
+        if not has_soap and not (self.note_text or "").strip():
+            raise HTTPException(422, "note must have either note_text or at least one SOAP field")
+        return self
 
 
 class TreatmentEventIn(BaseModel):
@@ -164,6 +216,24 @@ class ReviewIn(BaseModel):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _review_seconds(draft_generated_at: Optional[str], signed_at: str) -> Optional[float]:
+    """How long the clinician had the AI draft in front of them before signing.
+
+    Recorded, not enforced. A note signed seconds after its draft appeared is
+    the pattern documentation audits challenge as evidence that no meaningful
+    review happened (docs/clinical-documentation-plan.md §1.5); making the
+    number visible is what discourages it. None when the note wasn't
+    AI-drafted or the timestamp is unparseable — never a reason to reject.
+    """
+    if not draft_generated_at:
+        return None
+    try:
+        started = datetime.fromisoformat(draft_generated_at)
+        return round((datetime.fromisoformat(signed_at) - started).total_seconds(), 1)
+    except ValueError:
+        return None
 
 
 def _session_dir(session_id: str) -> str:
@@ -586,7 +656,10 @@ def get_note_draft(session_id: str):
             "Note drafting requires an LLM connection (ANTHROPIC_API_KEY) — "
             "not available in this local demo without a key.",
         )
-    return draft
+    # generated_at/ai_model travel with the draft so the client can hand them
+    # back on save, making the note's provenance and review duration a fact
+    # about this specific draft rather than something reconstructed later.
+    return {**draft, "generated_at": _now_iso(), "ai_model": DEFAULT_MODEL}
 
 
 @app.get("/sessions/{session_id}/results")
@@ -721,18 +794,58 @@ def get_analytics():
     return stats
 
 
+def _render_note_text(body: ClinicalNoteIn) -> str:
+    """Flat rendering of a note, for display surfaces that want one string.
+
+    Derived from the structured fields rather than replacing them — the
+    structure stays authoritative in storage. This is the direction the old
+    frontend flattening got backwards.
+    """
+    if any(getattr(body, f) for f in SOAP_FIELDS):
+        return "\n".join(
+            f"{f[0].upper()}: {getattr(body, f)}" for f in SOAP_FIELDS if getattr(body, f)
+        )
+    return body.note_text or ""
+
+
 @app.post("/sessions/{session_id}/notes")
 def add_clinical_note(session_id: str, body: ClinicalNoteIn):
     """Clinical notes are append-only, matching real clinical documentation
-    practice — amend via a new note, never edit/delete history."""
+    practice — amend via a new note, never edit/delete history.
+
+    `signed_at` is recorded separately from `created_at` even though they
+    coincide today: submitting the note *is* the attestation, and naming that
+    explicitly leaves room for a later draft/sign split without changing the
+    stored shape.
+    """
     _require_session(session_id)
-    notes = store.get("clinical_notes", session_id) or []
+    body = body.validated()
+    if body.amends:
+        existing = {n["note_id"] for n in (store.get("clinical_notes", session_id) or [])}
+        if body.amends not in existing:
+            raise HTTPException(404, f"cannot amend unknown note {body.amends}")
+
+    now = _now_iso()
     note = {
         "note_id": uuid.uuid4().hex[:10],
+        "note_type": body.note_type,
         "author": body.author,
-        "note_text": body.note_text,
-        "created_at": _now_iso(),
+        "author_role": body.author_role,
+        "amends": body.amends,
+        **{f: getattr(body, f) for f in SOAP_FIELDS},
+        "note_text": _render_note_text(body),
+        "created_at": now,
+        "signed_at": now,
+        "signed_by": body.author,
+        "provenance": {
+            "source": body.source,
+            "ai_model": body.ai_model,
+            "draft_generated_at": body.draft_generated_at,
+            "edited_fields": body.edited_fields,
+            "review_seconds": _review_seconds(body.draft_generated_at, now),
+        },
     }
+    notes = store.get("clinical_notes", session_id) or []
     notes.append(note)
     store.set("clinical_notes", session_id, notes)
     return note

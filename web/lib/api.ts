@@ -125,6 +125,11 @@ export interface NoteDraft {
   objective: string;
   assessment: string;
   plan: string;
+  /** Present on the on-demand draft (POST /note-draft), absent on the live
+   * running draft. Carried back on save so the note records which model
+   * drafted it and how long it was reviewed for. */
+  generated_at?: string;
+  ai_model?: string;
 }
 
 /** One transcribed line, in the same shape the batch pipeline produces. */
@@ -205,11 +210,52 @@ export interface PatientSummary extends PatientIn {
   risk_trajectory: TrendFlag;
 }
 
+export type NoteSource = "clinician" | "ai_draft_edited" | "ai_draft_accepted";
+
+/** Provenance of a saved note — what drafted it, what the clinician changed,
+ * and how long they had it before signing. See
+ * docs/clinical-documentation-plan.md §1.5. */
+export interface NoteProvenance {
+  source: NoteSource;
+  ai_model: string | null;
+  draft_generated_at: string | null;
+  edited_fields: string[] | null;
+  review_seconds: number | null;
+}
+
+export interface ClinicalNoteIn {
+  author: string;
+  author_role?: string | null;
+  note_type?: "initial_evaluation" | "progress" | "risk_assessment" | "addendum";
+  note_text?: string | null;
+  subjective?: string | null;
+  objective?: string | null;
+  assessment?: string | null;
+  plan?: string | null;
+  amends?: string | null;
+  source?: NoteSource;
+  draft_generated_at?: string | null;
+  ai_model?: string | null;
+  edited_fields?: string[] | null;
+}
+
 export interface ClinicalNote {
   note_id: string;
+  note_type: string;
   author: string;
+  author_role: string | null;
+  amends: string | null;
+  subjective: string | null;
+  objective: string | null;
+  assessment: string | null;
+  plan: string | null;
+  /** Flat rendering derived from the SOAP fields — for display only; the
+   * structured fields are what storage treats as authoritative. */
   note_text: string;
   created_at: string;
+  signed_at: string;
+  signed_by: string;
+  provenance: NoteProvenance;
 }
 
 export interface ReviewIn {
@@ -291,10 +337,10 @@ export const api = {
   listPatientVisits: (patientId: string) =>
     request<VisitSummary[]>(`/participants/${patientId}/sessions`),
 
-  addNote: (visitId: string, author: string, note_text: string) =>
+  addNote: (visitId: string, body: ClinicalNoteIn) =>
     request<ClinicalNote>(`/sessions/${visitId}/notes`, {
       method: "POST",
-      body: JSON.stringify({ author, note_text }),
+      body: JSON.stringify(body),
     }),
 
   listNotes: (visitId: string) =>

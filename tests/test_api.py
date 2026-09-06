@@ -196,6 +196,94 @@ def test_notes_unknown_session_404s(client):
                         json={"author": "x", "note_text": "y"}).status_code == 404
 
 
+def test_structured_soap_note_keeps_its_sections(client):
+    """The four SOAP fields must survive storage as fields. Flattening them
+    into one string was throwing away structure the drafter had produced."""
+    _, session_id = _run_full_session(client)
+
+    r = client.post(f"/sessions/{session_id}/notes", json={
+        "author": "Dr. Nabirye", "author_role": "psychiatrist",
+        "note_type": "initial_evaluation",
+        "subjective": "Reports low mood for three weeks.",
+        "objective": "Speech slowed; long pauses.",
+        "assessment": "Moderate depressive episode.",
+        "plan": "Review in two weeks.",
+    })
+    assert r.status_code == 200
+    note = r.json()
+    assert note["subjective"] == "Reports low mood for three weeks."
+    assert note["plan"] == "Review in two weeks."
+    assert note["author_role"] == "psychiatrist"
+    # the flat rendering is derived, not a replacement
+    assert "S: Reports low mood" in note["note_text"]
+    assert "P: Review in two weeks." in note["note_text"]
+    assert note["signed_by"] == "Dr. Nabirye"
+
+
+def test_note_provenance_records_what_drafted_it(client):
+    """A saved note must not be indistinguishable from a clinician-written
+    one — see docs/clinical-documentation-plan.md 1.5."""
+    _, session_id = _run_full_session(client)
+
+    drafted_at = "2026-01-01T10:00:00+00:00"
+    r = client.post(f"/sessions/{session_id}/notes", json={
+        "author": "Dr. Okello", "subjective": "Edited by hand.",
+        "objective": "As drafted.", "assessment": "As drafted.", "plan": "As drafted.",
+        "source": "ai_draft_edited", "ai_model": "claude-sonnet-5",
+        "draft_generated_at": drafted_at, "edited_fields": ["subjective"],
+    })
+    assert r.status_code == 200
+    prov = r.json()["provenance"]
+    assert prov["source"] == "ai_draft_edited"
+    assert prov["ai_model"] == "claude-sonnet-5"
+    assert prov["edited_fields"] == ["subjective"]
+    # signed long after that fixed draft timestamp, so the gap is positive
+    assert prov["review_seconds"] > 0
+
+    # A clinician-written note carries no review duration to report.
+    r = client.post(f"/sessions/{session_id}/notes",
+                     json={"author": "Dr. Okello", "note_text": "Own words."})
+    assert r.json()["provenance"]["review_seconds"] is None
+    assert r.json()["provenance"]["source"] == "clinician"
+
+
+def test_amendment_links_to_the_note_it_corrects(client):
+    """Append-only means a correction is a new note. `amends` keeps the chain
+    readable instead of leaving an orphaned contradiction."""
+    _, session_id = _run_full_session(client)
+
+    original = client.post(f"/sessions/{session_id}/notes",
+                            json={"author": "Dr. Nabirye", "note_text": "PHQ-9 recorded as 12."}).json()
+    r = client.post(f"/sessions/{session_id}/notes", json={
+        "author": "Dr. Nabirye", "note_type": "addendum",
+        "note_text": "Correction: PHQ-9 was 21.", "amends": original["note_id"],
+    })
+    assert r.status_code == 200
+    assert r.json()["amends"] == original["note_id"]
+    # the original is still there — amending never rewrites history
+    assert len(client.get(f"/sessions/{session_id}/notes").json()) == 2
+
+    bad = client.post(f"/sessions/{session_id}/notes", json={
+        "author": "x", "note_text": "y", "amends": "nosuchnote"})
+    assert bad.status_code == 404
+
+
+def test_empty_and_mislabelled_notes_are_rejected(client):
+    _, session_id = _run_full_session(client)
+
+    # no content at all in either shape
+    assert client.post(f"/sessions/{session_id}/notes",
+                        json={"author": "Dr. Nabirye"}).status_code == 422
+    assert client.post(f"/sessions/{session_id}/notes",
+                        json={"author": "Dr. Nabirye", "note_text": "   "}).status_code == 422
+    assert client.post(f"/sessions/{session_id}/notes",
+                        json={"author": "a", "note_text": "b",
+                              "note_type": "invented"}).status_code == 422
+    assert client.post(f"/sessions/{session_id}/notes",
+                        json={"author": "a", "note_text": "b",
+                              "source": "invented"}).status_code == 422
+
+
 def test_review_workflow(client):
     _, session_id = _run_full_session(client)
 
