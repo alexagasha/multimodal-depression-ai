@@ -404,6 +404,49 @@ def test_risk_quotes_degrade_to_empty_without_an_llm(client, monkeypatch):
     assert r.json()["quotes"] == []
 
 
+def test_hmis105_counts_come_from_the_clinician_not_the_model(client):
+    """National reporting must not be assembled from an unvalidated
+    prediction. The model's figure is reported separately, never substituted."""
+    from datetime import datetime, timezone
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    # one clearly-a-case visit, one clearly not
+    _run_full_session(client)  # PHQ-9 10 / HAM-D 15 from the helper -> a case
+    r = client.post("/participants", json=PARTICIPANT_BODY)
+    pid = r.json()["participant_id"]
+    sid = client.post("/sessions", json={"participant_id": pid}).json()["session_id"]
+    client.post(f"/sessions/{sid}/scale-responses", json={
+        "phq9_total": 2, "hamd_total": 3, "phq9_item9": 0, "hamd_suicide_item": 0})
+
+    report = client.get(f"/reports/hmis105?month={month}").json()
+    assert report["attendances_screened"] == 2
+    assert report["depression_cases"] == 1
+    assert report["source"] == "clinician-recorded PHQ-9 and HAM-D"
+    assert sum(report["depression_cases_by_sex"].values()) == 1
+    # conditions this system does not assess are omitted, not zeroed
+    assert "bipolar_disorder" in report["not_assessed"]
+    assert "bipolar_disorder" not in report
+    assert "model_estimated_cases" in report
+
+    assert client.get("/reports/hmis105?month=2026-1").status_code == 422
+
+
+def test_hmis105_ignores_other_months(client):
+    _run_full_session(client)
+    empty = client.get("/reports/hmis105?month=1999-01").json()
+    assert empty["attendances_screened"] == 0
+    assert empty["depression_cases"] == 0
+
+
+def test_audio_is_retained_by_default_on_close(client):
+    """The default must keep everything — for the research cohort the
+    recordings are the dataset."""
+    _, session_id = _run_full_session(client)
+    r = client.post(f"/sessions/{session_id}/close")
+    assert r.status_code == 200
+    assert r.json()["audio_discarded"] is False
+
+
 def test_review_workflow(client):
     _, session_id = _run_full_session(client)
 

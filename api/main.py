@@ -54,6 +54,7 @@ from api.patient_summary import generate_patient_summary
 from api.note_draft import draft_note
 from api.risk_assessment import IDEATION_LEVELS, DISPOSITIONS, find_risk_quotes
 from api.mse import build_mse
+from api.hmis import build_hmis105_mental_health
 from api.live_note import draft_live_note
 from api.caseload_query import answer_query
 from api.analytics_summary import generate_analytics_narrative
@@ -251,6 +252,38 @@ class ReviewIn(BaseModel):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# Raw interview audio is a processing artefact; the signed note is the record
+# (docs/clinical-documentation-plan.md 1.5). Discarding it once a visit closes
+# is therefore defensible — but it is a study-protocol decision, not a
+# deployment convenience, so the default is to keep everything and an operator
+# has to opt in. Never flip this default without checking the approved
+# protocol: for the research cohort the recordings ARE the dataset.
+RETAIN_AUDIO = os.environ.get("DEP_RETAIN_AUDIO", "1").strip().lower() not in ("0", "false", "no")
+
+
+def _apply_audio_retention(session_id: str) -> bool:
+    """Discard the raw waveform for a closed visit when retention is off.
+
+    The transcript is kept: it is what the note, the evidence quotes and the
+    risk record were derived from, and deleting it would orphan them. Only the
+    audio goes, and only after the visit is closed.
+    """
+    if RETAIN_AUDIO:
+        return False
+    session_dir = _session_dir(session_id)
+    removed = False
+    for name in os.listdir(session_dir) if os.path.isdir(session_dir) else []:
+        if "_AUDIO" in name:
+            try:
+                os.remove(os.path.join(session_dir, name))
+                removed = True
+            except OSError as e:
+                print(f"[retention] could not remove {name} ({type(e).__name__}); keeping it.")
+    if removed:
+        store.update("sessions", session_id, {"audio_discarded_at": _now_iso()})
+    return removed
 
 
 def _review_seconds(draft_generated_at: Optional[str], signed_at: str) -> Optional[float]:
@@ -843,6 +876,24 @@ def _render_note_text(body: ClinicalNoteIn) -> str:
     return body.note_text or ""
 
 
+@app.get("/reports/hmis105")
+def get_hmis105(month: str):
+    """Monthly mental-health roll-up shaped like Uganda's HMIS 105.
+
+    Counts come from the clinician's recorded scores, not the model's — see
+    api/hmis.py. `month` is YYYY-MM.
+    """
+    if len(month) != 7 or month[4] != "-" or not month.replace("-", "").isdigit():
+        raise HTTPException(422, "month must be YYYY-MM")
+    return build_hmis105_mental_health(
+        month,
+        store.list("sessions"),
+        store.list("participants"),
+        lambda sid: store.get("scale_responses", sid),
+        lambda sid: store.get("predictions", sid),
+    )
+
+
 @app.post("/sessions/{session_id}/notes")
 def add_clinical_note(session_id: str, body: ClinicalNoteIn):
     """Clinical notes are append-only, matching real clinical documentation
@@ -985,7 +1036,8 @@ def close_session(session_id: str):
             "POST /sessions/{id}/risk-assessment.",
         )
     store.update("sessions", session_id, {"status": "closed", "closed_at": _now_iso()})
-    return {"session_id": session_id, "status": "closed"}
+    discarded = _apply_audio_retention(session_id)
+    return {"session_id": session_id, "status": "closed", "audio_discarded": discarded}
 
 
 @app.post("/sessions/{session_id}/review")

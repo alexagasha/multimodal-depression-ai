@@ -1,6 +1,9 @@
 # Psychiatric documentation: standard, gap analysis, and implementation plan
 
-Status: proposal. Nothing here is implemented yet.
+Status: **implemented.** Phases 1-5 shipped; see the commits from
+"Keep the structure the note already had" onward. Part 3 is left in its
+original planning form as the record of what was intended and why, with
+per-phase notes on what actually landed.
 
 The dashboard already drafts a SOAP note and saves it. This document asks a
 narrower question: **would that note be acceptable as psychiatric
@@ -233,6 +236,26 @@ inference, and gives the acoustic model a clinical purpose beyond a score.
 
 **Total: roughly 4.5 days.** Phases 1 and 2 alone (2 days) close the gap that
 actually carries risk.
+
+### What actually landed
+
+All five phases, with three deviations worth recording:
+
+- **Phases 1 and 4 shipped together.** Both reshape `ClinicalNoteIn`, and
+  splitting them would have meant changing the same model twice.
+- **The MSE reports measurements without interpreting them.** The plan
+  imagined the speech domain being described ("slowed", "reduced prosody").
+  There is no reference distribution for this cohort, so asserting a normal
+  range would have been fabrication. The measured values are shown and the
+  interpretation is left to the clinician.
+- **Retention defaults to keeping everything.** The plan proposed deleting raw
+  audio once a note is signed. Implemented, but off by default and documented
+  in `docs/data-retention.md` as a protocol decision — for the research cohort
+  the recordings are the dataset.
+
+`POST /sessions/{id}/close` was added as the gate the risk requirement needed:
+there had been no notion of a visit being finished, so "cannot be completed
+without a risk assessment" had nothing to attach to.
 
 ---
 
