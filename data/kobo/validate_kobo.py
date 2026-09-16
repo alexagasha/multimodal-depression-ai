@@ -18,6 +18,10 @@ import sys
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from waves import BASE_WAVE, TRAINING_SPLITS, is_holdout_wave  # noqa: E402
+
+
 def _wire_repo(repo=None):
     """Put the real pipeline modules on sys.path.
 
@@ -44,7 +48,28 @@ def _wire_repo(repo=None):
 
 PHQ9_MAX, HAMD_MAX, ITEM9_MAX, SUICIDE_MAX = 27, 44, 3, 4
 LABEL_COLS = ["participant_id", "phq9_score", "hamd_score",
-              "phq9_item9_score", "hamd_suicide_item_score", "split"]
+              "phq9_item9_score", "hamd_suicide_item_score", "split", "wave"]
+# LABELS.csv written before collection waves existed has no `wave` column.
+LEGACY_LABEL_COLS = LABEL_COLS[:-1]
+
+
+def wave_split_violations(lab):
+    """Rows whose split contradicts their wave; empty means no leakage.
+
+    Wave-1 participants must be in train/dev/test. A held-out wave's
+    participants must carry the wave name as their split and never a training
+    split - that is the property that keeps the wave unseen.
+    """
+    waves = (lab["wave"] if "wave" in lab.columns
+             else pd.Series(BASE_WAVE, index=lab.index))
+    bad = []
+    for pid, split, wave in zip(lab.participant_id, lab.split.astype(str), waves.astype(str)):
+        if is_holdout_wave(wave):
+            if split != wave:
+                bad.append((int(pid), wave, split))
+        elif split not in TRAINING_SPLITS:
+            bad.append((int(pid), wave, split))
+    return bad
 
 
 class Report:
@@ -89,8 +114,11 @@ def main(out_dir):
         return r.show()
 
     lab = pd.read_csv(labels_path)
-    r.check(list(lab.columns) == LABEL_COLS,
+    r.check(list(lab.columns) in (LABEL_COLS, LEGACY_LABEL_COLS),
             f"LABELS.csv schema == spec (got {list(lab.columns)})")
+    r.check("wave" in lab.columns,
+            "LABELS.csv records each participant's collection wave "
+            "(re-run adapt_kobo.py if this warns)", warn_only=True)
     r.check(lab.participant_id.is_unique, "participant_id unique in LABELS.csv")
     r.check(not lab.isna().any().any(), "no NaN in LABELS.csv")
 
@@ -102,8 +130,11 @@ def main(out_dir):
         r.check(len(bad) == 0, f"{col} within 0..{hi} "
                                f"(observed {lab[col].min()}..{lab[col].max()})")
 
-    r.check(set(lab.split) <= {"train", "dev", "test"},
-            f"splits are train/dev/test (got {sorted(set(lab.split))})")
+    violations = wave_split_violations(lab)
+    r.check(not violations,
+            "every split agrees with its wave: wave 1 in train/dev/test, held-out "
+            "waves never in a training split"
+            + (f" - {violations[:5]}" if violations else ""))
 
     # ---- per-session structure ----
     pids = sorted(int(d) for d in os.listdir(out_dir)
@@ -187,10 +218,20 @@ def main(out_dir):
         qc_path = os.path.join(out_dir, "QC.csv")
         if os.path.exists(qc_path):
             qc = pd.read_csv(qc_path)
-            m = lab.merge(qc[["participant_id", "caseness", "interviewer_code"]],
-                          on="participant_id", how="left")
+            m_all = lab.merge(qc[["participant_id", "caseness", "interviewer_code"]],
+                              on="participant_id", how="left")
+            case = pd.crosstab(m_all.split, m_all.caseness)
+            # Stratification guarantees apply to wave 1's splits. A held-out wave
+            # is whatever was collected, so it is reported rather than required.
+            in_training = m_all.split.astype(str).isin(TRAINING_SPLITS)
+            m = m_all[in_training]
             ct = pd.crosstab(m.split, m.caseness)
-            case = ct
+            for w, g in m_all[~in_training].groupby("split"):
+                negs = int((g.caseness == False).sum())
+                r.check(negs > 0,
+                        f"held-out {w}: {len(g)} participants, {negs} non-case(s)"
+                        + ("" if negs else " - specificity cannot be estimated on it"),
+                        warn_only=True)
             # every split should contain at least one negative
             if False in ct.columns:
                 r.check((ct[False] > 0).all(),
@@ -216,6 +257,8 @@ def main(out_dir):
           f"(median {np.median(durations):.0f}s per participant)")
     print(f"30s segments    : {sum(seg_counts)} total, median {np.median(seg_counts):.0f}/participant")
     print(f"splits          : {lab.split.value_counts().to_dict()}")
+    if "wave" in lab.columns:
+        print(f"waves           : {lab.wave.value_counts().to_dict()}")
     if case is not None:
         print(f"caseness/split  :\n{case.to_string()}")
     print()

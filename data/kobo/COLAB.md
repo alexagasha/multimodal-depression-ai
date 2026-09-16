@@ -12,6 +12,9 @@ about 20 minutes.
 Upload the single file `kobo/kobo_colab_bundle.zip` (380 MB) to Google Drive.
 Put it at the top level of *My Drive* so the paths below work unchanged.
 
+If you rebuild the bundle, its `code/` folder must include `waves.py` alongside
+the scripts — they all import it, and fail at the first line without it.
+
 Upload the **zip**, not the folder. Google Drive uploads 4438 loose files roughly
 an order of magnitude slower than one archive of the same size, and the browser
 tab frequently stalls partway through a large folder upload.
@@ -83,6 +86,11 @@ do not want that landing halfway through a 15-minute decode.
 Expect: `sessions written: 153`, `usable: 135`, `excluded: 18`, splits
 `train 94 / dev 20 / test 21`. If those numbers differ, something is off — stop
 and check before transcribing.
+
+With wave 2 added (`--xlsx kobo_clean_analytic_combined.xlsx`), the wave-1
+numbers must be **identical** — still `train 94 / dev 20 / test 21` — with the new
+participants appearing only as `wave2`. If any wave-1 split count moves, stop:
+the hold-out has been compromised.
 
 Then verify:
 

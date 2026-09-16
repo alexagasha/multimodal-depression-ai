@@ -16,7 +16,7 @@ the default output path is outside git entirely.
 
 | | |
 |---|---|
-| Participants | 153 (≈40 more expected) |
+| Participants | 197 — wave 1: 153 (28 Jul–5 Aug 2026); wave 2: 44 (9–16 Aug 2026, **held out**) |
 | Audio | 4438 `.m4a` clips — **29 per participant, one per interview prompt** |
 | Format | AAC, 32 kHz, mono, ~64 kbps, 13.22 hours total |
 | Scores | PHQ-9 and HAM-D, **item-level**, plus 9 Section A demographics |
@@ -37,9 +37,12 @@ than it would take to read their own question aloud. Consequently every
 transcript row is `speaker="Participant"` and `sync.py`'s
 `INTERVIEWER_SPEAKER_NAMES` filter is a no-op here.
 
-**Recruitment sites are Butabika and Lira, not Butabika and Mulago.** There are
-zero Mulago participants. `site` is written to metadata for stratified analysis
-but is deliberately excluded from the 16-d feature vector
+**Recruitment sites differ between waves.** Wave 1 was Butabika and Lira only,
+with zero Mulago participants. Wave 2 is not: 9 participants chose Mulago (a new
+option on the form), 16 gave community sites recorded as Namataba, Kitoo,
+Kirinya, Kavule and Namata, and the rest were Lira (15) and Butabika (4). Compare
+performance across waves with that in mind. `site` is written to metadata for
+stratified analysis but is deliberately excluded from the 16-d feature vector
 (`metadata_pipeline.py`) so the model cannot shortcut on hospital.
 
 **The spoken audio is English — confirmed by manual listening (2026-08-08).**
@@ -70,9 +73,9 @@ JSON; don't read one as the other.
     <pid>_AUDIO.wav         29 clips concatenated, 16 kHz mono PCM16
     <pid>_METADATA.json     Section A, keyed for metadata_pipeline.py
 <out>/LABELS.csv            participant_id, phq9_score, hamd_score,
-                            phq9_item9_score, hamd_suicide_item_score, split
+                            phq9_item9_score, hamd_suicide_item_score, split, wave
 <out>/QC.csv                per-participant quality metrics + exclusion reasons
-<out>/registry.json         uuid -> pid + split. DO NOT DELETE.
+<out>/registry.json         uuid -> pid + split + wave. DO NOT DELETE.
 <out>/TRANSCRIPTS_PENDING.txt   present until Whisper has run
 ```
 
@@ -170,22 +173,68 @@ python adapt_kobo.py --xlsx kobo_clean_analytic.xlsx --audio_root audio --out se
 python transcribe_kobo.py --sessions sessions --audio_root audio
 ```
 
-Upload only `kobo_clean_analytic.xlsx` and `audio/`. Do **not** upload
+Upload the workbook and `audio/`, and put `waves.py` next to the scripts — `clean_kobo.py`, `adapt_kobo.py` and `validate_kobo.py` all import it. Do **not** upload
 `kobo_pid_key.xlsx` — nothing in the pipeline reads it and it carries the
 patient names.
 
 ---
 
-## Adding the next ~40 participants
+## Adding a collection wave
 
-1. Export the new data from KoBo (questionnaire XLSX + attachments ZIP).
-2. Re-run the cleaning step to regenerate `kobo_clean_analytic.xlsx`.
-3. Drop the new audio folders into `../../../kobo/audio/`.
-4. Re-run `adapt_kobo.py` with **no flags changed**.
+Wave 2 is 44 participants recorded 9–16 August 2026, after wave 1's last
+interview on 5 August. It is **held out**: every reported result was computed on
+wave 1, and wave 2 is only worth anything as a sample no model has seen. Each
+step below enforces that, because every way of losing it is silent.
 
-Existing participants keep their `participant_id` **and their train/dev/test
-assignment**, because both are keyed on KoBo `_uuid` and persisted in
-`registry.json`. Only unseen uuids get new ids and fresh split assignments.
+1. **Export everything from KoBo** — the questionnaire XLSX (*all versions,
+   English labels*) and the attachments, covering old and new submissions
+   together. The old rows are how the new file gets checked.
+
+2. **Clean** with `clean_kobo.py` (recovered from the script that produced wave
+   1's workbook, which was never committed):
+
+   ```bash
+   python data/kobo/clean_kobo.py --raw <export.xlsx> --out-key <path outside kobo/ and the repo>
+   ```
+
+   A row whose `_uuid` is in `registry.json` is wave 1; anything else becomes
+   `--new-wave` (default `wave2`), cross-checked against interview dates. It
+   writes `kobo_clean_analytic_combined.xlsx` — never overwriting wave 1's
+   workbook — and **writes nothing at all unless the wave-1 rows reproduce
+   `kobo_clean_analytic.xlsx` exactly**, every column. Participant ids and
+   interviewer codes are pinned, so neither row order nor a new interviewer
+   account can renumber wave 1.
+
+3. **Adapt**, pointing at the combined workbook and the export's attachments
+   folder (the one holding a folder per `_uuid`):
+
+   ```bash
+   python data/kobo/adapt_kobo.py --xlsx <kobo>/kobo_clean_analytic_combined.xlsx --audio_root <attachments>/<asset id>
+   ```
+
+   Wave-1 participants keep their id and their train/dev/test split. Wave-2
+   participants get `split = wave2` and are never stratified into train/dev/test;
+   the adapter refuses to write `LABELS.csv` if a held-out participant carries a
+   training split. The wave is recorded in `LABELS.csv`, `QC.csv` and every
+   `_METADATA.json` — as provenance only; it is not in the feature vector.
+
+4. **Validate** — `validate_kobo.py` fails if any split contradicts its wave.
+
+5. **Transcribe** the new participants on Colab, as for wave 1.
+
+### Using the held-out wave
+
+`src/eval/benchmark.py`, `src/eval/calibrate.py` and `scripts/fit_final_model.py`
+exclude held-out waves by default, reading splits from `--labels` (default
+`<kobo>/sessions/LABELS.csv`), and print what they excluded. `--include-holdout`
+adds them back, and `fit_final_model.py` records that choice in the exported
+weights' metadata.
+
+Do it in this order. **First**, score wave 2 with the frozen model that is
+already exported — a temporal validation. With few non-cases it is underpowered:
+it can show the model failing, but it cannot confirm it works. **Then**, and only
+then, merge with `--include-holdout`. Once wave 2 has been used for fitting, the
+chance to use it as an unseen sample is gone.
 
 > **Never delete `registry.json`.** Regenerating it reshuffles every split, which
 > silently moves material that was in `test` into `train`. If you need a clean

@@ -45,6 +45,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from src.eval.benchmark import (attach_prosody, attach_duration, load_cache,
                                 TEXT_SLICE, AUDIO_SLICE, META_SLICE)
 from src.fusion.model import HAMD_CASENESS_THRESHOLD
+from src.eval.cohort import add_cohort_args, resolve_labels
 
 
 # --------------------------------------------------------------------------
@@ -145,9 +146,11 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--target_sens", type=float, default=0.90)
     ap.add_argument("--out", default=os.path.join("outputs", "calibration.csv"))
+    add_cohort_args(ap)
     a = ap.parse_args()
 
-    X, Y, pids = load_cache(a.cache)
+    X, Y, pids = load_cache(a.cache, labels=resolve_labels(a.labels),
+                            include_holdout=a.include_holdout)
     y_bin = (Y[:, 1] >= HAMD_CASENESS_THRESHOLD).astype(int)
     print(f"caseness: {y_bin.sum()} cases / {(1-y_bin).sum()} non-cases\n")
 

@@ -27,6 +27,12 @@ ON THE THRESHOLD
     estimates generalisation, the shipped threshold should use all the data —
     but they are not the same number and the model card should say so.
 
+HELD-OUT WAVES
+    Participants from a held-out collection wave (split "wave2", ...) are
+    excluded unless --include-holdout is passed, and the exported metadata
+    records which it was. Include them only after the frozen model has been
+    evaluated on them - see src/eval/cohort.py.
+
 USAGE
     python scripts/fit_final_model.py --cache fusion_vectors.npz \
         --prosody prosody.csv --qc "<kobo>/sessions/QC.csv"
@@ -42,7 +48,8 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from src.eval.benchmark import attach_prosody, TEXT_SLICE, META_SLICE
+from src.eval.benchmark import attach_prosody, load_cache, TEXT_SLICE, META_SLICE
+from src.eval.cohort import add_cohort_args, resolve_labels
 from src.eval.calibrate import youden_threshold, sensitivity_threshold, binary_scores
 from src.fusion.model import LinearHead, HAMD_CASENESS_THRESHOLD
 
@@ -67,6 +74,7 @@ def main():
     ap.add_argument("--rule", default="youden", choices=["youden", "sens"])
     ap.add_argument("--target_sens", type=float, default=0.90)
     ap.add_argument("--out", default=os.path.join("outputs", "weights", "fusion_head.npz"))
+    add_cohort_args(ap)
     ap.add_argument("--feature_set", default="served", choices=["served", "legacy"],
                     help="served = text+prosody+metadata (808), the evaluated best; "
                          "legacy = text+wav2vec2+metadata (1552), matching what "
@@ -79,8 +87,10 @@ def main():
     from sklearn.preprocessing import StandardScaler
     from sklearn.metrics import roc_auc_score
 
-    d = np.load(a.cache, allow_pickle=True)
-    X_all, Y, pids = d["X"].astype(np.float64), d["Y"].astype(np.float64), d["pids"]
+    labels_path = resolve_labels(a.labels)
+    X_all, Y, pids, cohort = load_cache(a.cache, labels=labels_path,
+                                        include_holdout=a.include_holdout,
+                                        return_info=True)
     P = attach_prosody(pids, a.prosody, drop_duration=True)
 
     if a.feature_set == "served":
@@ -144,6 +154,8 @@ def main():
         "cache_sha256": sha256(a.cache),
         "prosody_sha256": sha256(a.prosody),
         "seed": a.seed,
+        "cohort": cohort,
+        "labels_sha256": sha256(labels_path) if labels_path else None,
         "note": ("Threshold fitted on all participants; reported performance uses "
                  "per-fold thresholds. Apparent performance above is optimistic."),
     }

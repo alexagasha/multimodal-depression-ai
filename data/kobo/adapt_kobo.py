@@ -34,14 +34,24 @@ RE-RUN SAFETY (the study is still collecting; ~40 more expected)
     every existing participant's id and split identical, and assigns new ones
     only to unseen uuids. Never delete registry.json — doing so reshuffles the
     splits and leaks test material into train.
+
+COLLECTION WAVES
+    A participant's wave is fixed once, when they are first registered, from the
+    `wave` column clean_kobo.py writes. Wave 1 is split train/dev/test. A later
+    wave is held out: its split is the wave name, never train/dev/test, so it
+    stays a sample no model has seen. See waves.py and src/eval/cohort.py.
 """
 import argparse
 import json
 import os
 import re
+import sys
 
 import numpy as np
 import pandas as pd
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from waves import BASE_WAVE, TRAINING_SPLITS, is_holdout_wave, wave_of  # noqa: E402
 
 TARGET_SR = 16000          # matches audio_pipeline.TARGET_SR
 PID_BASE = 1000            # kobo pids start at 1001; keeps clear of synthetic (300s)
@@ -129,8 +139,14 @@ def _write_wav(path, audio, sr=TARGET_SR):
 def _load_registry(path):
     if os.path.exists(path):
         with open(path) as f:
-            return json.load(f)
-    return {"by_uuid": {}, "next_pid": PID_BASE + 1}
+            reg = json.load(f)
+    else:
+        reg = {"by_uuid": {}, "next_pid": PID_BASE + 1}
+    # Entries written before collection waves existed are wave 1 - it was the
+    # only cohort there was. Backfilled so the saved registry says so explicitly.
+    for entry in reg["by_uuid"].values():
+        entry.setdefault("wave", BASE_WAVE)
+    return reg
 
 
 def _save_registry(path, reg):
@@ -213,13 +229,34 @@ def _finalise(out_dir, qcdf, reg, reg_path, labels, min_speech_sec,
     for u in reg["by_uuid"]:
         if u not in set(usable.uuid):
             reg["by_uuid"][u]["split"] = None
-    fresh = usable[usable.uuid.map(
-        lambda u: reg["by_uuid"].get(u, {}).get("split") is None)]
-    if len(fresh):
-        for u, s in _stratified_splits(fresh, seed, ratios).items():
+    # Row masks are built as explicit bool arrays. Series.map over an EMPTY frame
+    # returns object dtype, which pandas then reads as a list of column labels
+    # rather than a row mask - and re-running with nothing new is the normal case.
+    unsplit = np.array([reg["by_uuid"].get(u, {}).get("split") is None
+                        for u in usable.uuid], dtype=bool)
+    fresh = usable[unsplit]
+    # A held-out wave is never stratified into train/dev/test: its split IS the
+    # wave name. Stratifying it would scatter the only sample no model has seen
+    # across the existing splits, and nothing downstream would notice.
+    fresh_wave = [wave_of(reg["by_uuid"].get(u)) for u in fresh.uuid]
+    held_mask = np.array([is_holdout_wave(w) for w in fresh_wave], dtype=bool)
+    holdout, base = fresh[held_mask], fresh[~held_mask]
+    for u in holdout.uuid:
+        reg["by_uuid"][u]["split"] = wave_of(reg["by_uuid"][u])
+    if len(holdout):
+        held = pd.Series(fresh_wave)[held_mask].value_counts().to_dict()
+        print(f"held out {len(holdout)} participant(s) by wave: {held}")
+    if len(base):
+        for u, s in _stratified_splits(base, seed, ratios).items():
             reg["by_uuid"][u]["split"] = s
-        print(f"assigned splits to {len(fresh)} participant(s)")
+        print(f"assigned splits to {len(base)} participant(s)")
+    leaked = [u for u, e in reg["by_uuid"].items()
+              if is_holdout_wave(wave_of(e)) and e.get("split") in TRAINING_SPLITS]
+    if leaked:
+        raise RuntimeError(f"{len(leaked)} held-out participant(s) carry a training split; "
+                           f"refusing to write LABELS.csv (first: {leaked[:3]})")
     qcdf["split"] = qcdf.uuid.map(lambda u: reg["by_uuid"].get(u, {}).get("split"))
+    qcdf["wave"] = qcdf.uuid.map(lambda u: wave_of(reg["by_uuid"].get(u)))
 
     lab = labels.set_index("participant_id")
     recs = []
@@ -232,10 +269,11 @@ def _finalise(out_dir, qcdf, reg, reg_path, labels, min_speech_sec,
             "phq9_item9_score": int(s.phq9_item9_score),
             "hamd_suicide_item_score": int(s.hamd_suicide_item_score),
             "split": q.split,
+            "wave": q.wave,
         })
     pd.DataFrame(recs, columns=["participant_id", "phq9_score", "hamd_score",
                                 "phq9_item9_score", "hamd_suicide_item_score",
-                                "split"]).to_csv(
+                                "split", "wave"]).to_csv(
         os.path.join(out_dir, "LABELS.csv"), index=False)
     qcdf.to_csv(os.path.join(out_dir, "QC.csv"), index=False)
     _save_registry(reg_path, reg)
@@ -298,13 +336,21 @@ def adapt(xlsx, audio_root, out_dir, min_speech_sec=30.0, gap_sec=DEFAULT_GAP_SE
         if uuid is None:
             uuid = f"NOAUDIO::{sheet_pid}"
 
-        # stable pid
+        # stable pid. The wave is decided by clean_kobo.py, the only step that
+        # sees both the registry and the raw export; a workbook with no `wave`
+        # column predates collection waves and is wave 1.
+        row_wave = _norm(r.get("wave")) or BASE_WAVE
         if uuid in reg["by_uuid"]:
             pid = reg["by_uuid"][uuid]["pid"]
+            known = wave_of(reg["by_uuid"][uuid])
+            if row_wave != known:
+                print(f"  ! [{pid}] workbook says {row_wave}, registry says {known}; "
+                      f"keeping the registry's - a participant's wave never changes")
         else:
             pid = reg["next_pid"]
             reg["next_pid"] += 1
-            reg["by_uuid"][uuid] = {"pid": pid, "sheet_pid": sheet_pid, "split": None}
+            reg["by_uuid"][uuid] = {"pid": pid, "sheet_pid": sheet_pid, "split": None,
+                                    "wave": row_wave}
 
         dst = os.path.join(out_dir, str(pid))
         os.makedirs(dst, exist_ok=True)
@@ -371,6 +417,7 @@ def adapt(xlsx, audio_root, out_dir, min_speech_sec=30.0, gap_sec=DEFAULT_GAP_SE
             "interviewer_code": _norm(r.interviewer_code),
             "language_most_comfortable": _norm(r.language_most_comfortable),
             "source": "kobo-uganda-2026",
+            "wave": wave_of(reg["by_uuid"].get(uuid)),
         }
         with open(os.path.join(dst, f"{pid}_METADATA.json"), "w") as f:
             json.dump(meta, f, indent=2)
@@ -440,6 +487,12 @@ def _report(out_dir, qcdf):
                                   "interviewer_code", "reason"]].to_string(index=False))
     print(f"\ntotal audio      : {qcdf.audio_sec.sum() / 3600:.2f} h")
     print(f"usable audio     : {qcdf[qcdf.usable].audio_sec.sum() / 3600:.2f} h")
+    if "wave" in qcdf.columns:
+        print("\nby wave (usable/collected | cases / non-cases among usable):")
+        for w, g in qcdf.groupby("wave"):
+            gu = g[g.usable]
+            print(f"  {w:<6} {len(gu)}/{len(g)} | {int((gu.caseness == True).sum())} / "
+                  f"{int((gu.caseness == False).sum())}")
     u = qcdf[qcdf.usable & qcdf.split.notna()]
     print(f"\nsplits: {u.split.value_counts().to_dict()}")
     print("\ncaseness per split:")

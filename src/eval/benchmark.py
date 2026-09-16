@@ -39,6 +39,7 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from src.fusion.aggregate import TEXT_DIM, AUDIO_DIM, METADATA_DIM
 from src.fusion.model import HAMD_CASENESS_THRESHOLD, PHQ9_RANGE, HAMD_RANGE
+from src.eval.cohort import add_cohort_args, describe_cohort, resolve_labels, select_cohort
 
 warnings.filterwarnings("ignore")
 
@@ -48,13 +49,23 @@ META_SLICE = slice(TEXT_DIM + AUDIO_DIM, TEXT_DIM + AUDIO_DIM + METADATA_DIM)
 
 
 # --------------------------------------------------------------------------
-def load_cache(path):
+def load_cache(path, labels=None, include_holdout=False, return_info=False):
+    """Feature cache, restricted to the participants an analysis may see.
+
+    Every cross-validated and whole-cohort fit in this project reads through
+    here, so this is where a held-out collection wave is kept out of training.
+    See src/eval/cohort.py.
+    """
     d = np.load(path, allow_pickle=True)
     X = d["X"].astype(np.float64)
     Y = d["Y"].astype(np.float64)
     pids = d["pids"]
+    cache_splits = d["splits"] if "splits" in d.files else None
+    keep, info = select_cohort(pids, labels, cache_splits, include_holdout)
     print(f"cache: X={X.shape}  Y={Y.shape}  participants={len(pids)}")
-    return X, Y, pids
+    print(f"cohort: {describe_cohort(info)}")
+    X, Y, pids = X[keep], Y[keep], pids[keep]
+    return (X, Y, pids, info) if return_info else (X, Y, pids)
 
 
 def attach_duration(pids, qc_path):
@@ -228,13 +239,15 @@ def main():
                     help="proper permutation test: N shuffles per view, giving a null "
                          "distribution and an empirical p-value for the observed AUC")
     ap.add_argument("--out", default=os.path.join("outputs", "benchmark.csv"))
+    add_cohort_args(ap)
     a = ap.parse_args()
 
     if not os.path.exists(a.cache):
         sys.exit(f"No encode cache at {a.cache}. Run src/fusion/train.py first — it "
                  f"writes the cache while encoding.")
 
-    X, Y, pids = load_cache(a.cache)
+    X, Y, pids = load_cache(a.cache, labels=resolve_labels(a.labels),
+                            include_holdout=a.include_holdout)
     strat = (Y[:, 1] >= HAMD_CASENESS_THRESHOLD).astype(int)
     print(f"caseness: {int(strat.sum())} cases / {int((1 - strat).sum())} non-cases "
           f"({strat.mean():.1%} positive)")
