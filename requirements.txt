@@ -24,6 +24,16 @@ ctranslate2==4.6.0
 # ctranslate2 4.6.0 still imports pkg_resources, removed in setuptools 81.
 setuptools<81
 
+# Hosted ASR (no extra package needed — httpx above does the calls). Small
+# local models handle accented clinical English poorly and no CPU tuning fixes
+# that without a GPU, so DEP_ASR_PROVIDER switches transcription to a hosted
+# engine. Note these send interview audio off the machine, which participant
+# consent has to reflect.
+#   DEP_ASR_PROVIDER=local     (default)  faster-whisper on this machine
+#   DEP_ASR_PROVIDER=deepgram  + DEEPGRAM_API_KEY   best for live streaming
+#   DEP_ASR_PROVIDER=groq      + GROQ_API_KEY       whisper-large-v3-turbo, cheapest
+#   DEP_ASR_PROVIDER=openai    + OPENAI_API_KEY     whisper-1
+
 # Real backbones (install when swapping mock encoders for real ones):
 # torch>=2.2
 # transformers>=4.40        # BERT (text) + Wav2Vec2 (audio), both English

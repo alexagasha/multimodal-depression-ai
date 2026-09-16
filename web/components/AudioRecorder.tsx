@@ -6,9 +6,12 @@ import { api, ApiError, NoteDraft, TranscriptRow } from "@/lib/api";
 import { Card } from "@/components/FormField";
 
 /** How much audio to bank before shipping a chunk for live transcription.
- *  Short enough that captions feel live, long enough that base.en on a
- *  CPU-only box keeps up (it transcribes a chunk in well under this). */
-const CHUNK_SECONDS = 6;
+ *  Whisper is built to read ~30s of context at once, so short chunks cost
+ *  real accuracy — it can't use surrounding words to disambiguate, and each
+ *  boundary risks clipping a word. 12s trades a little latency for markedly
+ *  better text, and still leaves headroom: base.en transcribes 12s in ~7s on
+ *  a CPU-only box, so the stream stays ahead of the recording. */
+const CHUNK_SECONDS = 12;
 
 /**
  * Real live-mic recording: getUserMedia -> AudioContext -> ScriptProcessorNode
@@ -275,7 +278,18 @@ export default function AudioRecorder({
     setError(null);
     setLastResult(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Let the browser clean the signal before it ever reaches the model —
+      // laptop mics in a consulting room pick up fan noise, reverb and
+      // wildly varying speaker distance, all of which cost more ASR accuracy
+      // than any model-size change recovers.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          noiseSuppression: true,
+          echoCancellation: true,
+          autoGainControl: true,
+        },
+      });
       streamRef.current = stream;
 
       type WindowWithWebkitAudio = typeof window & { webkitAudioContext?: typeof AudioContext };
