@@ -33,7 +33,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.pipelines.sync import build_segments
 from src.pipelines.text_pipeline import BertTextEncoder, run_text_pipeline
-from src.pipelines.audio_pipeline import Wav2Vec2AudioEncoder, run_audio_pipeline, _load_wav
+from src.pipelines.audio_pipeline import (
+    Wav2Vec2AudioEncoder, run_audio_pipeline, _load_wav, resample_if_needed, TARGET_SR,
+)
 from src.pipelines.metadata_pipeline import run_metadata_pipeline
 from src.pipelines.prosody_pipeline import run_prosody_pipeline
 from src.pipelines.asr_pipeline import build_asr, run_asr_pipeline, is_probably_silence
@@ -434,6 +436,31 @@ def submit_scale_responses(session_id: str, body: ScaleResponsesIn):
     return {"risk_flag": risk_flag}
 
 
+def _write_pcm16_wav(path: str, waveform: np.ndarray, sr: int) -> None:
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes((np.clip(waveform, -1.0, 1.0) * 32767).astype("<i2").tobytes())
+
+
+def _persisted_sr(waveform: np.ndarray, sr: int) -> tuple:
+    """Resample to TARGET_SR before anything touches disk.
+
+    The browser recorder captures at whatever rate the OS/hardware's
+    AudioContext exposes (commonly 44100 or 48000 Hz, not 16000), and a
+    plain .wav upload can arrive at any rate too. run_prosody_pipeline reads
+    the persisted file straight off disk and refuses anything that isn't
+    exactly TARGET_SR (features aren't comparable across sample rates), so a
+    non-16kHz file written here would make every subsequent score attempt on
+    this session fail. ASR is unaffected either way — it resamples chunks
+    itself — so this is the one place the conversion has to happen.
+    """
+    if sr == TARGET_SR:
+        return waveform, sr
+    return resample_if_needed(waveform, sr, TARGET_SR), TARGET_SR
+
+
 @app.post("/sessions/{session_id}/audio")
 async def upload_audio(session_id: str, file: UploadFile):
     _require_session(session_id)
@@ -446,6 +473,8 @@ async def upload_audio(session_id: str, file: UploadFile):
         f.write(raw)
 
     waveform, sr = _load_wav(wav_path)
+    waveform, sr = _persisted_sr(waveform, sr)
+    _write_pcm16_wav(wav_path, waveform, sr)
     duration_sec = len(waveform) / float(sr)
     with open(os.path.join(session_dir, f"{session_id}_AUDIO.meta.json"), "w") as f:
         json.dump({"sample_rate": sr, "duration_sec": duration_sec}, f)
@@ -575,15 +604,12 @@ def finalize_audio(session_id: str):
 
     waveform = np.fromfile(pcm_path, dtype="<f4")
     sr = int(live["sample_rate"] or 16000)
+    waveform, sr = _persisted_sr(waveform, sr)
     duration_sec = len(waveform) / float(sr)
 
     # Assemble the same artefacts the whole-file path writes, so scoring and
     # the audio pipeline are identical regardless of how the audio arrived.
-    with wave.open(os.path.join(session_dir, f"{session_id}_AUDIO.wav"), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes((np.clip(waveform, -1.0, 1.0) * 32767).astype("<i2").tobytes())
+    _write_pcm16_wav(os.path.join(session_dir, f"{session_id}_AUDIO.wav"), waveform, sr)
     os.remove(pcm_path)
 
     with open(os.path.join(session_dir, f"{session_id}_AUDIO.meta.json"), "w") as f:
