@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Nunito, Quicksand } from "next/font/google";
 import NavShell from "@/components/NavShell";
+import ReadinessBanner from "@/components/ReadinessBanner";
 import Blob from "@/components/illustrations/Blob";
 import "./globals.css";
 
@@ -40,6 +41,7 @@ export default function RootLayout({
         />
         <div className="relative flex min-h-full flex-col">
           <NavShell />
+          <ReadinessBanner />
           <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6">
             {children}
           </main>

@@ -47,6 +47,7 @@ outputs/*
 !outputs/weights/
 outputs/weights/*
 !outputs/weights/*.npz
+!outputs/weights/RELEASE.json
 data/synthetic/sessions/
 data/edaic/sessions/
 data/live/

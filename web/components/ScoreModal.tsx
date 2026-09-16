@@ -215,6 +215,30 @@ function TreatmentSuggestionsCard({ suggestions }: { suggestions: string[] | nul
   );
 }
 
+/** Which model produced this score. A result from an unvalidated model gets
+ * the same danger styling as the referral banner, because it must not be read
+ * as a clinical score. Results stored before release checks have no fields. */
+function ModelProvenance({ model }: { model: ScoreResult["model"] }) {
+  if (!model) return null;
+  if (model.validated === false) {
+    return (
+      <p
+        role="alert"
+        className="mt-1 rounded-lg border border-[var(--color-danger-border)] bg-[var(--color-danger-bg)] px-2 py-1 text-xs font-semibold text-[var(--color-danger)]"
+      >
+        Unvalidated model: development only, not for clinical use.
+      </p>
+    );
+  }
+  return (
+    <p className="mt-0.5 text-xs text-sage-600">
+      {model.release ? `Model ${model.release}` : "Model release not recorded"}
+      {model.weights_sha256 ? ` · weights ${model.weights_sha256}` : ""}
+      {model.fitted ? ` · fitted ${model.fitted.slice(0, 10)}` : ""}
+    </p>
+  );
+}
+
 export default function ScoreModal({
   result,
   visitId,
@@ -239,7 +263,10 @@ export default function ScoreModal({
         className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-cream-50 shadow-xl"
       >
         <div data-print-area className="space-y-5 p-6">
-          <h2 className="font-display text-xl font-semibold text-sage-900">Screening result</h2>
+          <div>
+            <h2 className="font-display text-xl font-semibold text-sage-900">Screening result</h2>
+            <ModelProvenance model={result.model} />
+          </div>
 
           {result.risk_flag && <RiskBanner />}
 

@@ -83,6 +83,26 @@ export interface AcousticDriver {
   direction: string;
 }
 
+/** GET /health. `status` is about the process being up; `scoring_ready` is
+ * about whether this installation will produce a score it can stand behind.
+ * See api/readiness.py. */
+export interface HealthCheck {
+  name: string;
+  ok: boolean;
+  blocking: boolean;
+  detail: string;
+}
+
+export interface Health {
+  status: string;
+  scoring_ready: boolean;
+  allow_unvalidated: boolean;
+  release: string | null;
+  blockers: string[];
+  warnings: string[];
+  checks: HealthCheck[];
+}
+
 export interface ScoreResult {
   session_id: string;
   phq9_pred: number;
@@ -109,6 +129,13 @@ export interface ScoreResult {
     caseness_threshold: number;
     trained: boolean;
     fitted: string | null;
+    /** Release name when the weights match a tagged release, else null. */
+    release?: string | null;
+    weights_sha256?: string | null;
+    /** false = produced under the development override, not for clinical
+     * use. Absent on results stored before release checks existed. */
+    validated?: boolean;
+    unvalidated_reasons?: string[] | null;
   };
   narrative: string;
   /** All four below are null when unavailable (no ANTHROPIC_API_KEY) —
@@ -461,4 +488,6 @@ export const api = {
     }),
 
   getAnalytics: () => request<AnalyticsResult>("/analytics"),
+
+  getHealth: () => request<Health>("/health"),
 };

@@ -57,6 +57,7 @@ from api.note_draft import draft_note
 from api.risk_assessment import IDEATION_LEVELS, DISPOSITIONS, find_risk_quotes
 from api.mse import build_mse
 from api.hmis import build_hmis105_mental_health
+from api.readiness import component_checks, load_release, readiness_report
 from api.live_note import draft_live_note
 from api.caseload_query import answer_query
 from api.analytics_summary import generate_analytics_narrative
@@ -87,6 +88,8 @@ app.add_middleware(
 
 # Frozen encoders + fusion head, loaded once. Mock fallback if torch/transformers
 # aren't installed (see each module's docstring) — safe for local dev.
+# Scoring refuses to run on that fallback unless DEP_ALLOW_UNVALIDATED=1 is
+# set: see api/readiness.py.
 _text_enc = BertTextEncoder()
 # Only built when it is actually served. Under the default prosody
 # configuration this encoder is never called, and constructing it would pull
@@ -105,22 +108,47 @@ def _load_fusion_head():
         print("[model] no trained weights at outputs/weights/fusion_head.npz; "
               "serving an UNTRAINED head. Severity scores are random. "
               "Run scripts/fit_final_model.py.")
-        return FusionHead()
+        return FusionHead(), f"no trained weights at {WEIGHTS_PATH}"
     head = load_head(WEIGHTS_PATH)
     dim = getattr(head, "input_dim", None) or int(head.W1.shape[1])
     if dim != FUSION_INPUT_DIM:
         print(f"[model] weights expect {dim} features but this build assembles "
               f"{FUSION_INPUT_DIM}; refusing to use them and serving an UNTRAINED "
               f"head. Severity scores are random until the feature sets agree.")
-        return FusionHead()
+        return FusionHead(), (f"weights expect {dim} features but this build "
+                              f"assembles {FUSION_INPUT_DIM}")
     meta = getattr(head, "meta", {}) or {}
     print(f"[model] loaded {type(head).__name__}: {meta.get('feature_set', dim)} "
           f"| threshold {head.caseness_threshold:.2f} "
           f"| fitted {meta.get('fitted', 'unknown')}")
-    return head
+    return head, None
 
 
-_fusion_head = _load_fusion_head()
+_fusion_head, _FUSION_PROBLEM = _load_fusion_head()
+
+# Which tagged release, if any, the served weights belong to - matched by
+# content hash. Computed once: a file swapped under a running server is caught
+# at the next restart, and the release recorded on each score is the one
+# this process actually loaded.
+_RELEASE = load_release(WEIGHTS_PATH)
+
+
+def _readiness():
+    """Whether this installation may score. Evaluated per request rather than
+    cached, so the override flag and the transcriber are never stale - it is a
+    handful of attribute reads. See api/readiness.py."""
+    return readiness_report(component_checks(
+        _text_enc, _audio_enc, ACOUSTIC, _FUSION_PROBLEM, _asr, _RELEASE))
+
+
+_startup = _readiness()
+if _startup["scoring_ready"]:
+    print(f"[readiness] scoring READY with release {_RELEASE['release']}")
+else:
+    print("[readiness] scoring BLOCKED (fails closed): " + "; ".join(_startup["blockers"]))
+    if _startup["allow_unvalidated"]:
+        print("[readiness] DEP_ALLOW_UNVALIDATED is set: scoring anyway, and every "
+              "result is stamped validated=false")
 
 
 class ParticipantIn(BaseModel):
@@ -637,6 +665,16 @@ def get_live_state(session_id: str):
 @app.post("/sessions/{session_id}/score")
 def score_session(session_id: str):
     session = _require_session(session_id)
+    readiness = _readiness()
+    if not readiness["scoring_ready"] and not readiness["allow_unvalidated"]:
+        # Fails closed. A mock embedding still yields a well-formed vector and
+        # the vector still yields a plausible score, so nothing downstream
+        # would notice. Nothing the safety path needs is behind this check.
+        raise HTTPException(
+            503,
+            "Scoring is disabled on this installation because it is not running "
+            "the validated model release: " + "; ".join(readiness["blockers"])
+            + ". Clinical notes, risk assessment and referral flags still work.")
     scale = store.get("scale_responses", session_id)
     if scale is None:
         raise HTTPException(400, "scale responses not submitted yet")
@@ -715,6 +753,12 @@ def score_session(session_id: str):
             "caseness_threshold": round(float(threshold), 3),
             "trained": bool(getattr(_fusion_head, "meta", None)),
             "fitted": (getattr(_fusion_head, "meta", {}) or {}).get("fitted"),
+            "release": _RELEASE["release"] if _RELEASE["validated"] else None,
+            "weights_sha256": (_RELEASE["sha256"] or "")[:16] or None,
+            # False only under the development override: this score came from
+            # something other than the released model and is not for clinical use.
+            "validated": readiness["scoring_ready"],
+            "unvalidated_reasons": readiness["blockers"] or None,
         },
     }
     store.set("predictions", session_id, result)
@@ -1089,4 +1133,16 @@ def get_review(session_id: str):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """`status` is about the process being up. `scoring_ready` is about whether
+    this installation will produce a score it can stand behind - see
+    api/readiness.py and docs/release-process.md."""
+    r = _readiness()
+    return {
+        "status": "ok",
+        "scoring_ready": r["scoring_ready"],
+        "allow_unvalidated": r["allow_unvalidated"],
+        "release": _RELEASE["release"] if _RELEASE["validated"] else None,
+        "blockers": r["blockers"],
+        "warnings": r["warnings"],
+        "checks": r["checks"],
+    }

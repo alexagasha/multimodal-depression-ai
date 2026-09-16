@@ -210,6 +210,15 @@ In the analysed cohort it flagged 68 of 135 (50.4%). Eleven participants would
 have been missed had either instrument item been used alone — which is why the
 rule takes the union of all three sources.
 
+## Release
+
+The weights a field installation may serve are pinned by
+`outputs/weights/RELEASE.json` and a git tag of the same name
+(`scripts/tag_release.py`). The API refuses to score with any other weights,
+with mock encoders, or with a placeholder transcriber (`api/readiness.py`),
+and every stored score records its release and weights hash. See
+`docs/release-process.md`.
+
 ## Provenance
 
 Every prediction carries the feature set, input dimension, threshold and fitting

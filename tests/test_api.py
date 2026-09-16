@@ -29,6 +29,10 @@ def client(tmp_path, monkeypatch):
     # both slow and dependent on whether ASR deps happen to be present.
     monkeypatch.setattr(api_main._asr, "model", None)
     monkeypatch.setattr(api_main._asr, "backend", "mock")
+    # The API fails closed on mock components (api/readiness.py). These tests
+    # exercise the HTTP surface on exactly those mocks, so they run under the
+    # development override; tests/test_release_gate.py covers the refusal.
+    monkeypatch.setenv("DEP_ALLOW_UNVALIDATED", "1")
     return TestClient(api_main.app)
 
 
@@ -51,7 +55,8 @@ def _wav_bytes(duration_sec=40, sr=16000):
 def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    assert r.json()["status"] == "ok"
+    assert "scoring_ready" in r.json()
 
 
 def test_full_session_flow(client):
